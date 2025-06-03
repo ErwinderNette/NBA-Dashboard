@@ -1,8 +1,39 @@
+
 # Welcome to your Lovable project
 
 ## Project info
 
 **URL**: https://lovable.dev/projects/e46d1381-74d7-401d-bc56-a452438c4fd4
+
+## Environment Configuration
+
+### API Configuration
+Dieses Projekt ist für den Betrieb unter `nba.uppr.de` konfiguriert und nutzt zentrale API-Aufrufe über Umgebungsvariablen.
+
+**Erforderliche Umgebungsvariablen:**
+Kopieren Sie `.env.example` nach `.env` und passen Sie die Werte an:
+
+```bash
+cp .env.example .env
+```
+
+**Mindestens erforderlich:**
+```
+VITE_API_BASE_URL=https://netzwerk.uppr.de/api
+```
+
+### API Usage
+Das Projekt nutzt Axios mit einer zentralen Konfiguration in `src/utils/api.ts`. Alle API-Aufrufe gehen über diese Instanz und nutzen automatisch die `VITE_API_BASE_URL`.
+
+**Dynamische Kampagnen-API:**
+- Kampagnen können über die `CampaignSelector`-Komponente ausgewählt werden
+- API-Aufrufe werden automatisch mit der gewählten `campaignId` zusammengesetzt
+- Beispiel-Endpoint: `/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/{campaignId}/get-orders.json`
+
+### Deployment Configuration
+- **Router:** Konfiguriert für `basename="/"` für Hosting unter `nba.uppr.de`
+- **Build:** Standard Vite-Build-Prozess
+- **Environment:** Produktions-URLs in `.env.production` für verschiedene Deployment-Umgebungen
 
 ## How can I edit this code?
 
@@ -32,7 +63,11 @@ cd <YOUR_PROJECT_NAME>
 # Step 3: Install the necessary dependencies.
 npm i
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Step 4: Create environment file
+cp .env.example .env
+# Edit .env with your API configuration
+
+# Step 5: Start the development server with auto-reloading and an instant preview.
 npm run dev
 ```
 
@@ -59,6 +94,8 @@ This project is built with:
 - React
 - shadcn-ui
 - Tailwind CSS
+- Axios (für API-Requests)
+- React Query (für State Management)
 
 ## How can I deploy this project?
 
