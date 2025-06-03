@@ -6,7 +6,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
-import AdvertiserDashboard from "./pages/AdvertiserDashboard";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -14,13 +13,6 @@ const queryClient = new QueryClient();
 
 const App = () => {
   const isLoggedIn = localStorage.getItem("isLoggedIn") === "true";
-  const userRole = localStorage.getItem("userRole");
-
-  const getDefaultRoute = () => {
-    if (!isLoggedIn) return "/login";
-    if (userRole === "advertiser") return "/advertiser-dashboard";
-    return "/dashboard";
-  };
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -31,7 +23,9 @@ const App = () => {
           <Routes>
             <Route 
               path="/" 
-              element={<Navigate to={getDefaultRoute()} replace />} 
+              element={
+                isLoggedIn ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />
+              } 
             />
             <Route path="/login" element={<Login />} />
             <Route 
@@ -39,14 +33,6 @@ const App = () => {
               element={
                 <ProtectedRoute>
                   <Dashboard />
-                </ProtectedRoute>
-              } 
-            />
-            <Route 
-              path="/advertiser-dashboard" 
-              element={
-                <ProtectedRoute>
-                  <AdvertiserDashboard />
                 </ProtectedRoute>
               } 
             />
