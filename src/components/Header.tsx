@@ -7,7 +7,11 @@ const Header = () => {
       <div className="container mx-auto px-4 py-4 flex justify-between items-center">
         {/* Logo/Brand */}
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-pink-500 rounded transform rotate-45"></div>
+          <img 
+            src="/lovable-uploads/d8f0bf8e-1d1b-4046-bdfb-33bd1b356167.png" 
+            alt="NBA-Plattform Logo" 
+            className="w-8 h-8"
+          />
           <h1 className="text-xl font-semibold text-gray-800">NBA-Plattform</h1>
         </div>
         

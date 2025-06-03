@@ -5,7 +5,7 @@ import FileList from "@/components/FileList";
 
 const Index = () => {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-300 to-blue-500">
+    <div className="min-h-screen" style={{ background: 'linear-gradient(to bottom right, #009fe3, #0088cc)' }}>
       <Header />
       <div className="container mx-auto px-4 py-8 space-y-8">
         <UploadArea />
