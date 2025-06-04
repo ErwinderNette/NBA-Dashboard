@@ -30,7 +30,7 @@ const Header = () => {
           <img 
             src="/lovable-uploads/d8f0bf8e-1d1b-4046-bdfb-33bd1b356167.png" 
             alt="NBA-Plattform Logo" 
-            className="w-8 h-8"
+            className="w-8 h-8 object-contain flex-shrink-0"
           />
           <h1 className="text-xl font-semibold text-gray-800">NBA-Plattform</h1>
         </div>
