@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,11 +7,13 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
+import AdvertiserDashboard from "./pages/AdvertiserDashboard";
 
 const queryClient = new QueryClient();
 
 const App = () => {
   const isLoggedIn = localStorage.getItem("isLoggedIn") === "true";
+  const userRole = localStorage.getItem("userRole");
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -24,7 +25,11 @@ const App = () => {
             <Route 
               path="/" 
               element={
-                isLoggedIn ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />
+                isLoggedIn ? (
+                  userRole === "advertiser" ? 
+                    <Navigate to="/advertiser-dashboard" replace /> : 
+                    <Navigate to="/dashboard" replace />
+                ) : <Navigate to="/login" replace />
               } 
             />
             <Route path="/login" element={<Login />} />
@@ -33,6 +38,14 @@ const App = () => {
               element={
                 <ProtectedRoute>
                   <Dashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/advertiser-dashboard" 
+              element={
+                <ProtectedRoute>
+                  <AdvertiserDashboard />
                 </ProtectedRoute>
               } 
             />

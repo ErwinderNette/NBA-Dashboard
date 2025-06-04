@@ -22,7 +22,6 @@ const Login = () => {
     setTimeout(() => {
       // Prüfe Login-Daten für Publisher-Oberfläche
       if (email === "publisher@email.de" && password === "1234") {
-        // Speichere Login-Status
         localStorage.setItem("isLoggedIn", "true");
         localStorage.setItem("userRole", "publisher");
         localStorage.setItem("userEmail", email);
@@ -32,9 +31,22 @@ const Login = () => {
           description: "Willkommen in der NBA-Plattform!",
         });
         
-        // Weiterleitung zur Hauptseite
         navigate("/dashboard");
-      } else {
+      } 
+      // Prüfe Login-Daten für Advertiser-Oberfläche
+      else if (email === "advertiser@mail.de" && password === "4321") {
+        localStorage.setItem("isLoggedIn", "true");
+        localStorage.setItem("userRole", "advertiser");
+        localStorage.setItem("userEmail", email);
+        
+        toast({
+          title: "Login erfolgreich",
+          description: "Willkommen in der NBA-Plattform!",
+        });
+        
+        navigate("/advertiser-dashboard");
+      } 
+      else {
         toast({
           title: "Login fehlgeschlagen",
           description: "E-Mail oder Passwort ist falsch.",
