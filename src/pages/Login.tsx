@@ -78,10 +78,10 @@ const Login = () => {
           <div className="flex items-center justify-center space-x-2 mb-4">
             <img 
               src="/lovable-uploads/d8f0bf8e-1d1b-4046-bdfb-33bd1b356167.png" 
-              alt="NBA-Plattform Logo" 
+              alt="NBA-Dashboard Logo" 
               className="w-12 h-12 object-contain flex-shrink-0"
             />
-            <h1 className="text-3xl font-bold text-gray-800">NBA-Plattform</h1>
+            <h1 className="text-3xl font-bold text-gray-800">NBA-Dashboard</h1>
           </div>
         </div>
 

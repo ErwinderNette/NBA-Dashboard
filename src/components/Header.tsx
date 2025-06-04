@@ -29,10 +29,10 @@ const Header = () => {
         <div className="flex items-center space-x-2">
           <img 
             src="/lovable-uploads/d8f0bf8e-1d1b-4046-bdfb-33bd1b356167.png" 
-            alt="NBA-Plattform Logo" 
+            alt="NBA-Dashboard Logo" 
             className="w-8 h-8 object-contain flex-shrink-0"
           />
-          <h1 className="text-xl font-semibold text-gray-800">NBA-Plattform</h1>
+          <h1 className="text-xl font-semibold text-gray-800">NBA-Dashboard</h1>
         </div>
         
         {/* User Info */}
