@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
@@ -44,6 +44,9 @@ const AdminFileList = () => {
     }
   ]);
 
+  // Temporäre Auswahl für Dropdown-Werte
+  const [tempAssignments, setTempAssignments] = useState<Record<string, string>>({});
+
   const advertisers = [
     { id: "advertiser1", name: "NEW Energie", email: "new-energie@mail.de" },
     { id: "advertiser2", name: "eprimo", email: "eprimo@mail.de" },
@@ -81,14 +84,38 @@ const AdminFileList = () => {
     }
   };
 
-  const handleAdvertiserAssignment = (fileId: string, advertiserEmail: string) => {
+  const handleAdvertiserSelection = (fileId: string, advertiserEmail: string) => {
+    setTempAssignments(prev => ({
+      ...prev,
+      [fileId]: advertiserEmail
+    }));
+  };
+
+  const handleAdvertiserAssignment = (fileId: string) => {
+    const selectedAdvertiserEmail = tempAssignments[fileId];
+    if (!selectedAdvertiserEmail) {
+      toast({
+        title: "Fehler",
+        description: "Bitte wählen Sie zuerst einen Advertiser aus",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setFiles(prev => prev.map(file => 
       file.id === fileId 
-        ? { ...file, assignedAdvertiser: advertiserEmail, status: 'assigned' as const }
+        ? { ...file, assignedAdvertiser: selectedAdvertiserEmail, status: 'assigned' as const }
         : file
     ));
 
-    const advertiser = advertisers.find(a => a.email === advertiserEmail);
+    // Temporäre Auswahl entfernen
+    setTempAssignments(prev => {
+      const newTemp = { ...prev };
+      delete newTemp[fileId];
+      return newTemp;
+    });
+
+    const advertiser = advertisers.find(a => a.email === selectedAdvertiserEmail);
     toast({
       title: "Advertiser zugewiesen",
       description: `Datei wurde an ${advertiser?.name} weitergeleitet`,
@@ -159,21 +186,33 @@ const AdminFileList = () => {
             </div>
             <div className="col-span-2">
               {file.status === 'pending' ? (
-                <Select 
-                  value={file.assignedAdvertiser} 
-                  onValueChange={(value) => handleAdvertiserAssignment(file.id, value)}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Advertiser wählen..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {advertisers.map((advertiser) => (
-                      <SelectItem key={advertiser.id} value={advertiser.email}>
-                        {advertiser.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center space-x-2">
+                  <Select 
+                    value={tempAssignments[file.id] || ""} 
+                    onValueChange={(value) => handleAdvertiserSelection(file.id, value)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Advertiser wählen..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {advertisers.map((advertiser) => (
+                        <SelectItem key={advertiser.id} value={advertiser.email}>
+                          {advertiser.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {tempAssignments[file.id] && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleAdvertiserAssignment(file.id)}
+                      className="p-1 h-8 w-8 hover:bg-blue-50"
+                    >
+                      <Send size={14} className="text-blue-600" />
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <span className="text-gray-800">
                   {advertisers.find(a => a.email === file.assignedAdvertiser)?.name || file.assignedAdvertiser}
