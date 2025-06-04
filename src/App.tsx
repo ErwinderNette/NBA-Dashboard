@@ -1,3 +1,4 @@
+
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AdvertiserDashboard from "./pages/AdvertiserDashboard";
+import AdminDashboard from "./pages/AdminDashboard";
 
 const queryClient = new QueryClient();
 
@@ -28,6 +30,8 @@ const App = () => {
                 isLoggedIn ? (
                   userRole === "advertiser" ? 
                     <Navigate to="/advertiser-dashboard" replace /> : 
+                  userRole === "admin" ?
+                    <Navigate to="/admin-dashboard" replace /> :
                     <Navigate to="/dashboard" replace />
                 ) : <Navigate to="/login" replace />
               } 
@@ -46,6 +50,14 @@ const App = () => {
               element={
                 <ProtectedRoute>
                   <AdvertiserDashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/admin-dashboard" 
+              element={
+                <ProtectedRoute>
+                  <AdminDashboard />
                 </ProtectedRoute>
               } 
             />

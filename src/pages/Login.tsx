@@ -45,7 +45,20 @@ const Login = () => {
         });
         
         navigate("/advertiser-dashboard");
-      } 
+      }
+      // Prüfe Login-Daten für Admin-Oberfläche
+      else if (email === "admin@mail.de" && password === "admin") {
+        localStorage.setItem("isLoggedIn", "true");
+        localStorage.setItem("userRole", "admin");
+        localStorage.setItem("userEmail", email);
+        
+        toast({
+          title: "Login erfolgreich",
+          description: "Willkommen in der NBA-Plattform!",
+        });
+        
+        navigate("/admin-dashboard");
+      }
       else {
         toast({
           title: "Login fehlgeschlagen",
