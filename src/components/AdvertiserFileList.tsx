@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { ArrowDown, Edit } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,11 +22,11 @@ interface FileItem {
 
 const AdvertiserFileList = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [editData, setEditData] = useState<{[key: number]: {
+  const [editData, setEditData] = useState<Record<number, {
     feedback: string;
     status: string;
     additionalFeedback: string;
-  }}>({});
+  }>>({});
 
   const files: FileItem[] = [
     {

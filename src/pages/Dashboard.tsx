@@ -1,4 +1,3 @@
-
 import Header from "@/components/Header";
 import UploadArea from "@/components/UploadArea";
 import FileList from "@/components/FileList";
@@ -10,7 +9,6 @@ const Dashboard = () => {
       <Header />
       <div className="container mx-auto px-4 py-8 space-y-8">
         <UploadArea />
-        <CampaignSelector />
         <FileList />
       </div>
     </div>
