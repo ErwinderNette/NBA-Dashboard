@@ -1,5 +1,4 @@
-
-import api from '@/utils/api';
+import api from './api';
 
 export interface CampaignOrder {
   id: string;

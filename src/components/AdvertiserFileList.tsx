@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { uploadService } from '@/services/uploadService';
 
 interface FileItem {
   id: number;
@@ -95,8 +96,13 @@ const AdvertiserFileList = () => {
     // Hier würde später der API-Call erfolgen
   };
 
-  const handleDownload = (filename: string) => {
-    console.log(`Downloading file: ${filename}`);
+  const handleDownload = async (id: number, filename: string) => {
+    try {
+      await uploadService.downloadFile(id, filename);
+      // Optional: Toast anzeigen
+    } catch (err) {
+      // Optional: Toast für Fehler
+    }
   };
 
   return (
@@ -141,7 +147,7 @@ const AdvertiserFileList = () => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => handleDownload(file.filename)}
+                  onClick={() => handleDownload(file.id, file.filename)}
                   className="p-1 h-8 w-8 hover:bg-gray-200"
                 >
                   <ArrowDown size={16} className="text-gray-600" />

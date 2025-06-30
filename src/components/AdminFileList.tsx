@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import React from "react";
+import { uploadService } from '@/services/uploadService';
 
 // Define types for the data structures based on the backend
 interface UploadItem {
@@ -125,12 +126,20 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
     });
   };
 
-  const handleDownload = (filename: string) => {
-    console.log(`Downloading file: ${filename}`);
-    toast({
-      title: "Download (Backend notwendig)",
-      description: `Funktionalität zum Herunterladen im Backend muss implementiert werden.`,
-    });
+  const handleDownload = async (uploadId: number, filename: string) => {
+    try {
+      await uploadService.downloadFile(uploadId, filename);
+      toast({
+        title: "Download gestartet",
+        description: `Die Datei ${filename} wird heruntergeladen.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Fehler beim Download",
+        description: "Die Datei konnte nicht heruntergeladen werden.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleForward = (uploadId: number) => {
@@ -239,7 +248,7 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => handleDownload(file.filename)}
+                onClick={() => handleDownload(file.id, file.filename)}
                 className="p-1 h-8 w-8 hover:bg-gray-200"
               >
                 <ArrowDown size={16} className="text-gray-600" />

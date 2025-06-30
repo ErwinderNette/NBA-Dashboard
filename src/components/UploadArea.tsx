@@ -1,8 +1,8 @@
-
 import { useState, useCallback } from "react";
 import { Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { uploadService } from '@/services/uploadService';
 
 const UploadArea = () => {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -18,18 +18,30 @@ const UploadArea = () => {
     setIsDragOver(false);
   }, []);
 
+  const handleFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    try {
+      const formData = new FormData();
+      formData.append('file', files[0]); // Nur die erste Datei für Demo
+      await uploadService.uploadFile(formData);
+      toast({
+        title: 'Upload erfolgreich',
+        description: `${files[0].name} wurde hochgeladen.`,
+      });
+    } catch (err) {
+      toast({
+        title: 'Fehler beim Upload',
+        description: 'Die Datei konnte nicht hochgeladen werden.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      toast({
-        title: "Dateien hochgeladen",
-        description: `${files.length} Datei(en) erfolgreich hochgeladen`,
-      });
-      console.log("Dropped files:", files);
-    }
+    handleFiles(files);
   }, [toast]);
 
   const handleFileSelect = () => {
@@ -38,13 +50,7 @@ const UploadArea = () => {
     input.multiple = true;
     input.onchange = (e) => {
       const files = Array.from((e.target as HTMLInputElement).files || []);
-      if (files.length > 0) {
-        toast({
-          title: "Dateien ausgewählt",
-          description: `${files.length} Datei(en) ausgewählt`,
-        });
-        console.log("Selected files:", files);
-      }
+      handleFiles(files);
     };
     input.click();
   };

@@ -1,4 +1,3 @@
-
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -18,56 +17,45 @@ const Login = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    // Simuliere kurze Ladzeit
-    setTimeout(() => {
-      // Prüfe Login-Daten für Publisher-Oberfläche
-      if (email === "publisher@email.de" && password === "1234") {
-        localStorage.setItem("isLoggedIn", "true");
-        localStorage.setItem("userRole", "publisher");
-        localStorage.setItem("userEmail", email);
-        
-        toast({
-          title: "Login erfolgreich",
-          description: "Willkommen in der NBA-Plattform!",
-        });
-        
-        navigate("/dashboard");
-      } 
-      // Prüfe Login-Daten für Advertiser-Oberfläche
-      else if (email === "advertiser@mail.de" && password === "4321") {
-        localStorage.setItem("isLoggedIn", "true");
-        localStorage.setItem("userRole", "advertiser");
-        localStorage.setItem("userEmail", email);
-        
-        toast({
-          title: "Login erfolgreich",
-          description: "Willkommen in der NBA-Plattform!",
-        });
-        
-        navigate("/advertiser-dashboard");
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!response.ok) {
+        throw new Error('Login fehlgeschlagen');
       }
-      // Prüfe Login-Daten für Admin-Oberfläche
-      else if (email === "admin@mail.de" && password === "admin") {
-        localStorage.setItem("isLoggedIn", "true");
-        localStorage.setItem("userRole", "admin");
-        localStorage.setItem("userEmail", email);
-        
-        toast({
-          title: "Login erfolgreich",
-          description: "Willkommen in der NBA-Plattform!",
-        });
-        
-        navigate("/admin-dashboard");
+      const data = await response.json();
+      localStorage.setItem('isLoggedIn', 'true');
+      localStorage.setItem('userRole', data.role);
+      localStorage.setItem('userEmail', data.email);
+      localStorage.setItem('userName', data.name);
+      localStorage.setItem('auth_token', data.token);
+
+      toast({
+        title: 'Login erfolgreich',
+        description: 'Willkommen in der NBA-Plattform!',
+      });
+
+      if (data.role === 'publisher') {
+        navigate('/dashboard');
+      } else if (data.role === 'advertiser') {
+        navigate('/advertiser-dashboard');
+      } else if (data.role === 'admin') {
+        navigate('/admin-dashboard');
+      } else {
+        navigate('/dashboard');
       }
-      else {
-        toast({
-          title: "Login fehlgeschlagen",
-          description: "E-Mail oder Passwort ist falsch.",
-          variant: "destructive",
-        });
-      }
+    } catch (err) {
+      toast({
+        title: 'Login fehlgeschlagen',
+        description: 'E-Mail oder Passwort ist falsch.',
+        variant: 'destructive',
+      });
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
   return (

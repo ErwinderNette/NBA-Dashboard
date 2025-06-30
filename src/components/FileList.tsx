@@ -1,8 +1,9 @@
-
 import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { uploadService } from '@/services/uploadService';
 
 interface FileItem {
+  id: number;
   filename: string;
   uploadDate: string;
   advertiser: string;
@@ -12,18 +13,21 @@ interface FileItem {
 const FileList = () => {
   const files: FileItem[] = [
     {
+      id: 1,
       filename: "20250415_NEWEnergie",
       uploadDate: "15.04.2025",
       advertiser: "NEW Energie",
       status: "active"
     },
     {
+      id: 2,
       filename: "20250401_eprimo",
       uploadDate: "01.04.2025",
       advertiser: "eprimo",
       status: "pending"
     },
     {
+      id: 3,
       filename: "20250315_Ankerkraut",
       uploadDate: "15.03.2025",
       advertiser: "Ankerkraut",
