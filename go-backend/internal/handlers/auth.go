@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"nba-dashboard/internal/models"
 	"os"
 	"time"
@@ -135,10 +136,13 @@ func AuthRequired() fiber.Handler {
 		if err != nil || !token.Valid {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid or expired token"})
 		}
+
+		// **Hier: Claims direkt aus dem Token extrahieren!**
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token claims"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 		}
+		fmt.Printf("Token Claims: %#v\n", claims)
 		c.Locals("user", claims)
 		return c.Next()
 	}

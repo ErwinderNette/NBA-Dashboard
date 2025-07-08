@@ -4,13 +4,13 @@ import { UploadItem } from '@/types/upload';
 export const uploadService = {
   // Get all uploads
   getUploads: async (): Promise<UploadItem[]> => {
-    const response = await api.get('/api/uploads');
+    const response = await api.get('/uploads');
     return response.data;
   },
 
   // Grant access to an advertiser
   grantAccess: async (uploadId: number, advertiserId: number, expiresAt: Date): Promise<void> => {
-    await api.post(`/api/uploads/${uploadId}/access`, {
+    await api.post(`/uploads/${uploadId}/access`, {
       advertiserId,
       expiresAt: expiresAt.toISOString(),
     });
@@ -18,12 +18,12 @@ export const uploadService = {
 
   // Update upload status
   updateStatus: async (uploadId: number, status: 'approved' | 'rejected'): Promise<void> => {
-    await api.patch(`/api/uploads/${uploadId}/status`, { status });
+    await api.patch(`/uploads/${uploadId}/status`, { status });
   },
 
   // Download file
   downloadFile: async (uploadId: number, filename?: string): Promise<void> => {
-    const response = await api.get(`/api/uploads/${uploadId}/download`, {
+    const response = await api.get(`/uploads/${uploadId}/download`, {
       responseType: 'blob',
     });
     const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -38,7 +38,7 @@ export const uploadService = {
 
   // Upload file
   uploadFile: async (formData: FormData): Promise<void> => {
-    await api.post('/api/upload', formData, {
+    await api.post('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },

@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 )
 
@@ -85,8 +86,13 @@ func main() {
 
 func handleFileUpload(c *fiber.Ctx) error {
 	u := c.Locals("user")
-	claims, ok := u.(map[string]interface{})
-	if !ok {
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 	}
 	userEmail, _ := claims["email"].(string)
@@ -128,13 +134,17 @@ func handleFileUpload(c *fiber.Ctx) error {
 // Handle get uploads
 func handleGetUploads(c *fiber.Ctx) error {
 	u := c.Locals("user")
-	claims, ok := u.(map[string]interface{})
-	role, _ := claims["role"].(string)
-	userEmail, _ := claims["email"].(string)
-
-	if !ok || role == "" {
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
 
 	var uploads []models.Upload
 	var err error
@@ -175,8 +185,16 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 // Handle grant access
 func handleGrantAccessDB(c *fiber.Ctx) error {
 	u := c.Locals("user")
-	claims := u.(map[string]interface{})
-	role, _ := claims["role"].(string)
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
 	if role != "admin" {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can grant access"})
 	}
@@ -210,9 +228,17 @@ func parseUint(s string) uint {
 
 func handleDownloadFile(c *fiber.Ctx) error {
 	u := c.Locals("user")
-	claims := u.(map[string]interface{})
-	role, _ := claims["role"].(string)
-	userEmail, _ := claims["email"].(string)
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
 
 	id := c.Params("id")
 	var upload models.Upload
@@ -229,8 +255,16 @@ func handleDownloadFile(c *fiber.Ctx) error {
 
 func handleUpdateUploadStatus(c *fiber.Ctx) error {
 	u := c.Locals("user")
-	claims := u.(map[string]interface{})
-	role, _ := claims["role"].(string)
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
 	if role != "admin" {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can update status"})
 	}

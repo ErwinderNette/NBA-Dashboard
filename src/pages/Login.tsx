@@ -28,6 +28,7 @@ const Login = () => {
         throw new Error('Login fehlgeschlagen');
       }
       const data = await response.json();
+      console.log("Login-Response:", data);
       localStorage.setItem('isLoggedIn', 'true');
       localStorage.setItem('userRole', data.role);
       localStorage.setItem('userEmail', data.email);
@@ -49,6 +50,7 @@ const Login = () => {
         navigate('/dashboard');
       }
     } catch (err) {
+      console.error("Login-Fehler:", err);
       toast({
         title: 'Login fehlgeschlagen',
         description: 'E-Mail oder Passwort ist falsch.',
