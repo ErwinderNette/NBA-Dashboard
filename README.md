@@ -2,6 +2,8 @@
 
 Ein modernes Dashboard für die Verwaltung und Analyse von NBA-Daten, bestehend aus einem React-Frontend und einem Go-Backend.
 
+---
+
 ## 🚀 Features
 
 - **Benutzerauthentifizierung** mit verschiedenen Rollen (Admin, Advertiser)
@@ -10,143 +12,129 @@ Ein modernes Dashboard für die Verwaltung und Analyse von NBA-Daten, bestehend 
 - **Responsive Design** mit moderner UI/UX
 - **Sichere API-Integration** mit zentraler Konfiguration
 
+---
+
 ## 🛠️ Technologie-Stack
 
-### Frontend
-- **Framework**: React mit TypeScript
-- **Build Tool**: Vite
-- **Styling**: 
-  - Tailwind CSS
-  - shadcn/ui Komponenten
-- **State Management**: React Query
-- **HTTP Client**: Axios
-- **Routing**: React Router
+**Frontend:**  
+- React (TypeScript), Vite, Tailwind CSS, shadcn/ui, React Query, Axios, React Router
 
-### Backend
-- **Framework**: Go mit Fiber
-- **Features**:
-  - CORS-Unterstützung
-  - File Upload Handling
-  - Logger Middleware
-  - 10MB Upload-Limit
+**Backend:**  
+- Go (Fiber), CORS, File Upload, Logger Middleware
 
-## 📦 Installation
-
-### Voraussetzungen
-- Node.js (LTS Version)
-- Go 1.24.4 oder höher
-- npm oder yarn
-
-### Frontend Setup
-```bash
-# Repository klonen
-git clone <repository-url>
-
-# In das Projektverzeichnis wechseln
-cd NBA-Dashboard
-
-# Dependencies installieren
-npm install
-
-# Umgebungsvariablen konfigurieren
-cp .env.example .env
-# .env Datei mit den korrekten Werten anpassen
-
-# Entwicklungsserver starten
-npm run dev
-```
-
-### Backend Setup
-```bash
-# In das Backend-Verzeichnis wechseln
-cd go-backend
-
-# Go-Module installieren
-go mod download
-
-# Server starten
-go run cmd/main.go
-```
-
-## 🔧 Konfiguration
-
-### Frontend Umgebungsvariablen
-```env
-VITE_API_BASE_URL=http://localhost:3001/api
-```
-
-### Backend Konfiguration
-- Port: 3001
-- Upload-Verzeichnis: `uploads/`
-- CORS: Konfiguriert für `http://localhost:4173`
+---
 
 ## 📁 Projektstruktur
 
+```plaintext
+NBA-Dashboard/
+│
+├── go-backend/         # Go-Backend: API, Auth, Uploads, Datenbank
+│   ├── cmd/            # Einstiegspunkt für den Go-Server
+│   ├── internal/
+│   │   ├── config/     # Konfiguration (z.B. Datenbank)
+│   │   ├── handlers/   # HTTP-Handler (z.B. Authentifizierung)
+│   │   └── models/     # Datenmodelle (User, Uploads)
+│   ├── uploads/        # Upload-Verzeichnis für Dateien
+│   ├── go.mod, go.sum  # Go-Abhängigkeiten
+│
+├── public/             # Statische Dateien (Bilder, Icons, robots.txt)
+│   └── lovable-uploads/# Öffentlich zugängliche Uploads
+│
+├── src/                # React-Frontend
+│   ├── components/     # Wiederverwendbare UI-Komponenten
+│   ├── hooks/          # Eigene React-Hooks
+│   ├── lib/            # Hilfsfunktionen
+│   ├── pages/          # Seiten (Dashboard, Login, etc.)
+│   ├── services/       # API- und Service-Logik
+│   ├── types/          # TypeScript-Typdefinitionen
+│   ├── utils/          # Weitere Hilfsfunktionen
+│   ├── App.tsx, main.tsx # Einstiegspunkte
+│   └── index.css, App.css # Stylesheets
+│
+├── docker-compose.yml  # Container-Orchestrierung
+├── tailwind.config.ts  # Tailwind CSS Konfiguration
+├── package.json        # Node.js Abhängigkeiten & Skripte
+├── README.md           # Diese Datei
+└── ...                 # Weitere Konfigurationsdateien
+```
+
+---
+
+## ⚙️ Installation & Setup
+
+### Voraussetzungen
+- Node.js (LTS)
+- Go 1.24.4+
+- npm oder yarn
+
 ### Frontend
-
-## Environment Configuration
-
-### API Configuration
-Dieses Projekt ist für den Betrieb unter `nba.uppr.de` konfiguriert und nutzt zentrale API-Aufrufe über Umgebungsvariablen.
-
-**Erforderliche Umgebungsvariablen:**
-Kopieren Sie `.env.example` nach `.env` und passen Sie die Werte an:
-
 ```bash
+git clone <repository-url>
+cd NBA-Dashboard
+npm install
 cp .env.example .env
+# .env anpassen
+npm run dev
 ```
 
-**Mindestens erforderlich:**
+### Backend
+```bash
+cd go-backend
+go mod download
+go run cmd/main.go
 ```
-VITE_API_BASE_URL=https://netzwerk.uppr.de/api
-```
 
-### API Usage
-Das Projekt nutzt Axios mit einer zentralen Konfiguration in `src/utils/api.ts`. Alle API-Aufrufe gehen über diese Instanz und nutzen automatisch die `VITE_API_BASE_URL`.
+---
 
-**Dynamische Kampagnen-API:**
-- Kampagnen können über die `CampaignSelector`-Komponente ausgewählt werden
-- API-Aufrufe werden automatisch mit der gewählten `campaignId` zusammengesetzt
-- Beispiel-Endpoint: `/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/{campaignId}/get-orders.json`
+## 🔧 Konfiguration
 
-### Deployment Configuration
-- **Router:** Konfiguriert für `basename="/"` für Hosting unter `nba.uppr.de`
-- **Build:** Standard Vite-Build-Prozess
-- **Environment:** Produktions-URLs in `.env.production` für verschiedene Deployment-Umgebungen
+**Frontend:**  
+.env → VITE_API_BASE_URL=http://localhost:3001/api
 
+**Backend:**  
+- Port: 3001
+- Upload-Verzeichnis: uploads/
+- CORS: http://localhost:4173
 
-```
+---
 
 ## 🔐 Sicherheit
 
-- Geschützte Routen für Admin- und Advertiser-Bereiche
-- Sichere Datei-Upload-Validierung
-- CORS-Konfiguration für sichere Cross-Origin-Requests
+- Geschützte Routen für Admin/Advertiser
+- Sichere Datei-Uploads
+- CORS-Konfiguration
+
+---
 
 ## 🚀 Deployment
 
-### Frontend
-- Build mit `npm run build`
-- Statische Dateien in `dist/` Verzeichnis
-- Konfiguriert für Hosting unter `nba.uppr.de`
+**Frontend:**  
+npm run build → dist/ für Hosting
 
-### Backend
-- Go-Binary erstellen mit `go build`
-- Server auf Port 3001 ausführen
-- Upload-Verzeichnis mit korrekten Berechtigungen konfigurieren
+**Backend:**  
+go build → Binary auf Server, Port 3001
+
+---
 
 ## 🤝 Beitragen
 
 1. Fork das Repository
-2. Erstelle einen Feature Branch
-3. Committe deine Änderungen
-4. Push zum Branch
-5. Erstelle einen Pull Request
+2. Feature Branch erstellen
+3. Änderungen committen
+4. Pushen
+5. Pull Request
+
+---
 
 ## 📝 Lizenz
 
 desörf
 
+---
+
 ## 👥 Autoren
 
 erwski
+
+---
