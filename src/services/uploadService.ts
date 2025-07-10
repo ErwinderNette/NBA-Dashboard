@@ -42,4 +42,9 @@ export const uploadService = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+
+  // Datei löschen
+  deleteUpload: async (uploadId: number): Promise<void> => {
+    await api.delete(`/uploads/${uploadId}`);
+  },
 }; 

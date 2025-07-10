@@ -42,6 +42,11 @@ const AdminDashboard = () => {
     };
 
     fetchData();
+
+    // Listener für Upload-Updates
+    const reload = () => fetchData();
+    window.addEventListener("uploads-updated", reload);
+    return () => window.removeEventListener("uploads-updated", reload);
   }, [toast]);
 
   const handleGrantAccess = async (uploadId: number, advertiserId: number, expiresAt: Date) => {

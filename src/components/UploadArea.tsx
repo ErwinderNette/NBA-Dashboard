@@ -1,10 +1,20 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { uploadService } from '@/services/uploadService';
 
-const UploadArea = () => {
+interface UploadAreaProps {
+  onUploadSuccess?: (fileInfo: {
+    name: string;
+    uploadDate: string;
+    advertiser: string;
+    statusColor?: string;
+    downloadUrl?: string;
+  }) => void;
+}
+
+const UploadArea = ({ onUploadSuccess }: UploadAreaProps) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const { toast } = useToast();
 
@@ -21,13 +31,32 @@ const UploadArea = () => {
   const handleFiles = async (files: File[]) => {
     if (files.length === 0) return;
     try {
+      const file = files[0];
+      const allowedTypes = [".csv", ".xls", ".xlsx"];
+      if (!allowedTypes.some(type => file.name.endsWith(type))) {
+        toast({
+          title: 'Ungültiger Dateityp',
+          description: 'Nur CSV- oder Excel-Dateien sind erlaubt.',
+          variant: 'destructive',
+        });
+        return;
+      }
       const formData = new FormData();
-      formData.append('file', files[0]); // Nur die erste Datei für Demo
+      formData.append('file', file);
       await uploadService.uploadFile(formData);
       toast({
         title: 'Upload erfolgreich',
-        description: `${files[0].name} wurde hochgeladen.`,
+        description: `${file.name} wurde hochgeladen.`,
       });
+      if (onUploadSuccess) {
+        onUploadSuccess({
+          name: file.name,
+          uploadDate: new Date().toLocaleDateString('de-DE'),
+          advertiser: 'Advertiser', // Platzhalter
+          statusColor: '#e91e63', // pink
+          // downloadUrl: '', // Optional: Backend-URL
+        });
+      }
     } catch (err) {
       toast({
         title: 'Fehler beim Upload',
@@ -42,7 +71,7 @@ const UploadArea = () => {
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer.files);
     handleFiles(files);
-  }, [toast]);
+  }, [toast, onUploadSuccess]);
 
   const handleFileSelect = () => {
     const input = document.createElement('input');
