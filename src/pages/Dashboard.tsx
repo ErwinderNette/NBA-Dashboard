@@ -5,9 +5,11 @@ import FileList from "@/components/FileList";
 import CampaignSelector from "@/components/CampaignSelector";
 import { uploadService } from "@/services/uploadService";
 import { UploadItem } from "@/types/upload";
+import { useToast } from "@/hooks/use-toast";
 
 const Dashboard = () => {
   const [files, setFiles] = useState<UploadItem[]>([]);
+  const { toast } = useToast();
 
   // Lädt Uploads aus dem Backend
   const fetchUploads = async () => {
@@ -51,9 +53,17 @@ const Dashboard = () => {
       try {
         await uploadService.deleteUpload(file.id);
         setFiles(prev => prev.filter(f => f.id !== file.id));
+        toast({
+          title: "Datei gelöscht",
+          description: `${file.name || file.filename} wurde erfolgreich gelöscht.`,
+        });
         fetchUploads(); // Backend-Sync
       } catch (err) {
-        // Fehlerbehandlung (optional Toast)
+        toast({
+          title: "Fehler beim Löschen",
+          description: "Die Datei konnte nicht gelöscht werden.",
+          variant: "destructive",
+        });
       }
     } else {
       // Optimistische Datei (noch nicht im Backend)

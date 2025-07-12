@@ -76,6 +76,7 @@ func main() {
 	app.Post("/api/uploads/:id/access", handlers.AuthRequired(), handleGrantAccessDB)
 	app.Get("/api/uploads/:id/download", handlers.AuthRequired(), handleDownloadFile)
 	app.Patch("/api/uploads/:id/status", handlers.AuthRequired(), handleUpdateUploadStatus)
+	app.Delete("/api/uploads/:id", handlers.AuthRequired(), handleDeleteUpload)
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
@@ -285,4 +286,43 @@ func handleUpdateUploadStatus(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "Status updated successfully"})
+}
+
+// Handle delete upload
+func handleDeleteUpload(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
+
+	id := c.Params("id")
+	var upload models.Upload
+	if err := db.First(&upload, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+	}
+
+	// Nur Admin oder Besitzer darf löschen
+	if role != "admin" && upload.UploadedBy != userEmail {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
+	}
+
+	// Datei im Dateisystem löschen
+	if err := os.Remove(upload.FilePath); err != nil && !os.IsNotExist(err) {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete file from disk"})
+	}
+
+	// Soft-Delete in DB
+	if err := db.Delete(&upload).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete upload in DB"})
+	}
+
+	return c.JSON(fiber.Map{"message": "Upload deleted successfully"})
 }
