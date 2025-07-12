@@ -151,7 +151,7 @@ func handleGetUploads(c *fiber.Ctx) error {
 
 	if role == "admin" {
 		err = db.Order("created_at desc").Find(&uploads).Error
-	} else if role == "advertiser" {
+	} else if role == "advertiser" || role == "publisher" {
 		err = db.Where("uploaded_by = ?", userEmail).Order("created_at desc").Find(&uploads).Error
 	} else {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})

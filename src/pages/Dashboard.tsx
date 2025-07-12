@@ -68,7 +68,7 @@ const Dashboard = () => {
         <UploadArea onUploadSuccess={handleUploadSuccess} />
         <FileList files={files.map(file => ({
           name: file.filename,
-          uploadDate: new Date(file.upload_date).toLocaleDateString('de-DE'),
+          uploadDate: file.upload_date ? new Date(file.upload_date).toLocaleDateString('de-DE') : '',
           advertiser: file.uploaded_by || '',
           status: file.status,
           statusColor: file.status === 'pending' ? '#e91e63' : file.status === 'approved' ? '#4caf50' : '#2196f3',
