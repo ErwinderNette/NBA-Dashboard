@@ -1,10 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { ArrowDown, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import React from "react";
 import { uploadService } from '@/services/uploadService';
+import api from "@/services/api";
 
 // Define types for the data structures based on the backend
 interface UploadItem {
@@ -16,12 +17,22 @@ interface UploadItem {
   uploaded_by: string;
   status: string; // e.g., 'pending', 'approved', 'rejected'
   advertiser_count?: number; // Assuming this might come from the backend query
+  last_modified_by?: string; // Added for last modified by
+  assigned_advertiser_email?: string; // Added for assigned advertiser email
 }
 
 interface Advertiser {
   id: number; // Assuming SERIAL PRIMARY KEY becomes number
   name: string;
   email: string;
+}
+
+interface UserWithCompany {
+  id: number;
+  name: string;
+  email: string;
+  company: string;
+  role: string;
 }
 
 // Define the props type for AdminFileList
@@ -36,6 +47,16 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
   
   // Temporäre Auswahl für Dropdown-Werte
   const [tempAssignments, setTempAssignments] = useState<Record<number, number>>({});
+  const [allUsers, setAllUsers] = useState<UserWithCompany[]>([]);
+
+  useEffect(() => {
+    api.get("/users").then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
+  }, []);
+
+  function getCompanyByEmail(email: string): string {
+    const user = allUsers.find(u => u.email === email);
+    return user?.company || email;
+  }
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -58,13 +79,15 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
     switch (status) {
       case 'approved':
         return 'Genehmigt';
-      case 'assigned': // Changed 'assigned' to 'granted'
+      case 'assigned':
         return 'Zugewiesen';
+      case 'feedback':
+        return 'Feedback eingereicht';
       case 'pending':
         return 'Ausstehend';
       case 'rejected':
         return 'Abgelehnt';
-       case 'granted': // Added 'granted' status
+      case 'granted':
         return 'Zugewiesen';
       default:
         return 'Unbekannt';
@@ -162,26 +185,26 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
         <div className="grid grid-cols-12 gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
           <div className="col-span-3">Dateiname</div>
           <div className="col-span-2">Upload Datum</div>
-          <div className="col-span-2">Publisher</div>
-          <div className="col-span-2">Advertiser</div>
+          <div className="col-span-2">bearbeitet von</div>
+          <div className="col-span-2">Kunde</div>
           <div className="col-span-1">Status</div>
           <div className="col-span-2">Aktionen</div>
         </div>
         
         {/* File rows */}
-        {uploads.map((file) => (
+        {(uploads ?? []).map((file) => (
           <div 
             key={file.id}
             className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg"
           >
-            <div className="col-span-3 text-gray-800 font-medium">
+            <div className="col-span-3 text-gray-800 font-medium truncate max-w-[350px] cursor-pointer" title={file.filename}>
               {file.filename}
             </div>
             <div className="col-span-2 text-gray-600">
               {new Date(file.upload_date).toLocaleDateString()}
             </div>
             <div className="col-span-2 text-gray-800">
-              {file.uploaded_by}
+              {getCompanyByEmail(file.last_modified_by || file.uploaded_by)}
             </div>
             <div className="col-span-2">
               {file.status === 'pending' ? (
@@ -191,7 +214,7 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
                     onValueChange={(value) => handleAdvertiserSelection(file.id, value)}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Advertiser wählen..." />
+                      <SelectValue placeholder="Kunde wählen..." />
                     </SelectTrigger>
                     <SelectContent>
                       {advertisers.map((advertiser) => (
@@ -214,7 +237,12 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
                 </div>
               ) : (
                 <span className="text-gray-800">
-                  {getStatusText(file.status)}
+                  {(() => {
+                    const email = file.assigned_advertiser_email;
+                    if (!email) return 'Unbekannt';
+                    const user = allUsers.find(u => u.email === email);
+                    return user?.company || 'Unbekannt';
+                  })()}
                 </span>
               )}
             </div>

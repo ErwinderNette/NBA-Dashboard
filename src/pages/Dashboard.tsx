@@ -38,7 +38,7 @@ const Dashboard = () => {
         uploaded_by: fileInfo.advertiser || '',
         status: 'pending',
       },
-      ...prev
+      ...(prev ?? [])
     ]);
     // Nach kurzer Zeit mit Backend synchronisieren
     setTimeout(() => {
@@ -76,7 +76,7 @@ const Dashboard = () => {
       <Header />
       <div className="container mx-auto px-4 py-8 space-y-8">
         <UploadArea onUploadSuccess={handleUploadSuccess} />
-        <FileList files={files.map(file => ({
+        <FileList files={(files ?? []).map(file => ({
           name: file.filename,
           uploadDate: file.upload_date ? new Date(file.upload_date).toLocaleDateString('de-DE') : '',
           advertiser: file.uploaded_by || '',

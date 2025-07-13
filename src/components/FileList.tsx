@@ -44,7 +44,8 @@ const FileList = ({ files, onDelete }: FileListProps) => {
           <div>Download</div>
         </div>
         {/* File rows */}
-        {files.map((file, index) => (
+        {(files ?? []).length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
+        {(files ?? []).map((file, index) => (
           <div
             key={index}
             className="grid grid-cols-[40px,2fr,1.2fr,1.2fr,1fr,1fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center"

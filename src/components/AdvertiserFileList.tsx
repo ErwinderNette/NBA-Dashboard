@@ -146,8 +146,8 @@ const AdvertiserFileList = () => {
           <div className="col-span-1">Download</div>
         </div>
         {/* File rows */}
-        {uploads.length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
-        {uploads.map((file) => (
+        {(uploads ?? []).length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
+        {(uploads ?? []).map((file) => (
           <div key={file.id}>
             <div className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">
               <div
