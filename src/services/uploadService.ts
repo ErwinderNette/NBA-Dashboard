@@ -36,6 +36,13 @@ export const uploadService = {
     window.URL.revokeObjectURL(url);
   },
 
+  // Datei ersetzen
+  replaceFile: async (uploadId: number, formData: FormData): Promise<void> => {
+    await api.post(`/uploads/${uploadId}/replace`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+
   // Upload file
   uploadFile: async (formData: FormData): Promise<void> => {
     await api.post('/upload', formData, {

@@ -51,6 +51,9 @@ func main() {
 	// Init DB (führt auch Migration aus)
 	db = config.InitDB()
 
+	// Migration für UploadAccess nachholen
+	db.AutoMigrate(&UploadAccess{})
+
 	// Lege Default-User an
 	handlers.AddInitialUsers(db)
 
@@ -77,6 +80,7 @@ func main() {
 	app.Get("/api/uploads/:id/download", handlers.AuthRequired(), handleDownloadFile)
 	app.Patch("/api/uploads/:id/status", handlers.AuthRequired(), handleUpdateUploadStatus)
 	app.Delete("/api/uploads/:id", handlers.AuthRequired(), handleDeleteUpload)
+	app.Post("/api/uploads/:id/replace", handlers.AuthRequired(), handleReplaceUpload)
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
@@ -152,7 +156,38 @@ func handleGetUploads(c *fiber.Ctx) error {
 
 	if role == "admin" {
 		err = db.Order("created_at desc").Find(&uploads).Error
-	} else if role == "advertiser" || role == "publisher" {
+	} else if role == "advertiser" {
+		// 1. Eigene Uploads
+		var ownUploads []models.Upload
+		db.Where("uploaded_by = ?", userEmail).Order("created_at desc").Find(&ownUploads)
+		// 2. Zugewiesene Uploads (über UploadAccess)
+		// Hole die User-ID (Advertiser-ID) anhand der E-Mail
+		var user models.User
+		err2 := db.Where("email = ?", userEmail).First(&user).Error
+		var accessUploads []models.Upload
+		if err2 == nil {
+			var accesses []UploadAccess
+			db.Where("advertiser_id = ?", user.ID).Find(&accesses)
+			var uploadIDs []uint
+			for _, a := range accesses {
+				uploadIDs = append(uploadIDs, a.UploadID)
+			}
+			if len(uploadIDs) > 0 {
+				db.Where("id IN ?", uploadIDs).Order("created_at desc").Find(&accessUploads)
+			}
+		}
+		// Füge eigene und zugewiesene Uploads zusammen (ohne Duplikate)
+		uploadMap := make(map[uint]models.Upload)
+		for _, u := range ownUploads {
+			uploadMap[u.ID] = u
+		}
+		for _, u := range accessUploads {
+			uploadMap[u.ID] = u
+		}
+		for _, u := range uploadMap {
+			uploads = append(uploads, u)
+		}
+	} else if role == "publisher" {
 		err = db.Where("uploaded_by = ?", userEmail).Order("created_at desc").Find(&uploads).Error
 	} else {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
@@ -167,20 +202,18 @@ func handleGetUploads(c *fiber.Ctx) error {
 
 // Handle get advertisers
 func handleGetAdvertisers(c *fiber.Ctx) error {
-	// Mock data for now
-	advertisers := []fiber.Map{
-		{
-			"id":    1,
-			"name":  "Sample Advertiser 1",
-			"email": "advertiser1@example.com",
-		},
-		{
-			"id":    2,
-			"name":  "Sample Advertiser 2",
-			"email": "advertiser2@example.com",
-		},
+	var advertisers []models.User
+	db.Where("role = ?", "advertiser").Find(&advertisers)
+	// Mappe auf das gewünschte JSON-Format (id, name, email)
+	var result []fiber.Map
+	for _, a := range advertisers {
+		result = append(result, fiber.Map{
+			"id":    a.ID,
+			"name":  a.Name,
+			"email": a.Email,
+		})
 	}
-	return c.JSON(advertisers)
+	return c.JSON(result)
 }
 
 // Handle grant access
@@ -247,8 +280,24 @@ func handleDownloadFile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
 	}
 
-	if role != "admin" && upload.UploadedBy != userEmail {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
+	if role != "admin" {
+		// Prüfe, ob der User der Uploader ist
+		if upload.UploadedBy == userEmail {
+			// darf herunterladen
+		} else if role == "advertiser" {
+			// Prüfe, ob ein UploadAccess für diesen Advertiser existiert
+			var user models.User
+			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
+			}
+			var access UploadAccess
+			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
+			}
+			// Zugriff erlaubt
+		} else {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
+		}
 	}
 
 	return c.Download(upload.FilePath, upload.Filename)
@@ -325,4 +374,72 @@ func handleDeleteUpload(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "Upload deleted successfully"})
+}
+
+func handleReplaceUpload(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
+
+	id := c.Params("id")
+	var upload models.Upload
+	if err := db.First(&upload, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+	}
+
+	if role != "admin" {
+		// Prüfe, ob der User der Uploader ist
+		if upload.UploadedBy == userEmail {
+			// darf ersetzen
+		} else if role == "advertiser" {
+			// Prüfe, ob ein UploadAccess für diesen Advertiser existiert
+			var user models.User
+			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
+			}
+			var access UploadAccess
+			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
+			}
+			// Zugriff erlaubt
+		} else {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
+		}
+	}
+
+	// Datei aus dem Request holen
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file uploaded"})
+	}
+
+	// Alte Datei im Dateisystem löschen (optional, Fehler ignorieren)
+	_ = os.Remove(upload.FilePath)
+
+	// Neue Datei speichern
+	filename := filepath.Join("uploads", file.Filename)
+	if err := c.SaveFile(file, filename); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save file"})
+	}
+
+	// Upload-Metadaten aktualisieren
+	upload.Filename = file.Filename
+	upload.FileSize = file.Size
+	upload.ContentType = file.Header.Get("Content-Type")
+	upload.FilePath = filename
+	upload.UpdatedAt = time.Now()
+	if err := db.Save(&upload).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload in DB"})
+	}
+
+	return c.JSON(fiber.Map{"message": "File replaced successfully"})
 }

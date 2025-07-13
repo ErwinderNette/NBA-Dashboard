@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowDown, Edit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,14 +12,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { uploadService } from '@/services/uploadService';
-
-interface FileItem {
-  id: number;
-  filename: string;
-  uploadDate: string;
-  advertiser: string;
-  status: 'active' | 'pending' | 'rejected';
-}
+import { UploadItem } from '@/types/upload';
+import { useToast } from "@/hooks/use-toast";
 
 const AdvertiserFileList = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -28,34 +22,34 @@ const AdvertiserFileList = () => {
     status: string;
     additionalFeedback: string;
   }>>({});
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [selectedFiles, setSelectedFiles] = useState<Record<number, File | null>>({});
+  const [isUploading, setIsUploading] = useState<Record<number, boolean>>({});
+  const { toast } = useToast();
 
-  const files: FileItem[] = [
-    {
-      id: 1,
-      filename: "20250415_NEWEnergie",
-      uploadDate: "15.04.2025",
-      advertiser: "NEW Energie",
-      status: "active"
-    },
-    {
-      id: 2,
-      filename: "20250401_eprimo",
-      uploadDate: "01.04.2025",
-      advertiser: "eprimo",
-      status: "pending"
-    },
-    {
-      id: 3,
-      filename: "20250315_Ankerkraut",
-      uploadDate: "15.03.2025",
-      advertiser: "Ankerkraut",
-      status: "rejected"
-    }
-  ];
+  useEffect(() => {
+    const fetchUploads = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const allUploads = await uploadService.getUploads();
+        setUploads(allUploads); // KEIN Filter mehr!
+      } catch (err) {
+        setError('Fehler beim Laden der Uploads.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchUploads();
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'active':
+      case 'approved':
+      case 'granted':
         return 'bg-pink-500';
       case 'pending':
         return 'bg-gray-400';
@@ -105,36 +99,104 @@ const AdvertiserFileList = () => {
     }
   };
 
+  // Handler für Datei-Auswahl
+  const handleFileChange = (uploadId: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+    setSelectedFiles(prev => ({ ...prev, [uploadId]: file }));
+  };
+
+  // Handler für Datei ersetzen
+  const handleReplaceFile = async (uploadId: number) => {
+    const file = selectedFiles[uploadId];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    setIsUploading(prev => ({ ...prev, [uploadId]: true }));
+    try {
+      await uploadService.replaceFile(uploadId, formData);
+      toast({ title: 'Datei ersetzt', description: 'Die Datei wurde erfolgreich ersetzt.' });
+      setSelectedFiles(prev => ({ ...prev, [uploadId]: null }));
+      if (fileInputs.current[uploadId]) fileInputs.current[uploadId]!.value = '';
+      window.location.reload();
+    } catch (err) {
+      toast({ title: 'Fehler', description: 'Die Datei konnte nicht ersetzt werden.', variant: 'destructive' });
+    } finally {
+      setIsUploading(prev => ({ ...prev, [uploadId]: false }));
+    }
+  };
+
+  if (isLoading) {
+    return <div>Lade Dateien...</div>;
+  }
+  if (error) {
+    return <div>{error}</div>;
+  }
+
   return (
     <div className="bg-white rounded-2xl shadow-lg p-6">
       <h3 className="text-xl font-semibold text-gray-800 mb-6">Aktuelle Uploads</h3>
-      
       <div className="space-y-1">
         {/* Header */}
         <div className="grid grid-cols-12 gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
           <div className="col-span-4">Dateiname</div>
           <div className="col-span-2">Upload Datum</div>
-          <div className="col-span-3">Advertiser</div>
+          <div className="col-span-3">Publisher</div>
           <div className="col-span-2">Status</div>
+          <div className="col-span-1">Upload</div>
           <div className="col-span-1">Download</div>
         </div>
-        
         {/* File rows */}
-        {files.map((file) => (
+        {uploads.length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
+        {uploads.map((file) => (
           <div key={file.id}>
-            <div className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg">
-              <div className="col-span-4 text-gray-800 font-medium">
+            <div className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">
+              <div
+                className="col-span-4 text-gray-800 font-medium truncate max-w-[350px] cursor-pointer"
+                title={file.filename}
+              >
                 {file.filename}
               </div>
               <div className="col-span-2 text-gray-600">
-                {file.uploadDate}
+                {file.upload_date ? new Date(file.upload_date).toLocaleDateString('de-DE') : ''}
               </div>
               <div className="col-span-3 text-gray-800">
-                {file.advertiser}
+                {file.uploaded_by}
               </div>
               <div className="col-span-2 flex items-center">
                 <div className={`w-3 h-3 rounded-full ${getStatusColor(file.status)}`}></div>
               </div>
+              {/* Upload/Ersetzen */}
+              <div className="col-span-1 flex flex-col items-start space-y-1">
+                <input
+                  type="file"
+                  style={{ display: 'none' }}
+                  ref={el => fileInputs.current[file.id] = el}
+                  onChange={e => handleFileChange(file.id, e)}
+                  accept=".csv,.xls,.xlsx,.pdf,.doc,.docx,.png,.jpg,.jpeg"
+                />
+                <button
+                  className="text-blue-600 underline text-sm"
+                  onClick={() => fileInputs.current[file.id]?.click()}
+                  type="button"
+                  disabled={isUploading[file.id]}
+                >
+                  Ersetzen
+                </button>
+                {selectedFiles[file.id] && (
+                  <div className="flex items-center space-x-2 mt-1">
+                    <span className="text-xs text-gray-700 truncate max-w-[100px]">{selectedFiles[file.id]?.name}</span>
+                    <button
+                      className="ml-2 bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700"
+                      onClick={() => handleReplaceFile(file.id)}
+                      type="button"
+                      disabled={isUploading[file.id]}
+                    >
+                      {isUploading[file.id] ? 'Hochladen...' : 'Hochladen'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {/* Download */}
               <div className="col-span-1 flex items-center space-x-2">
                 <Button
                   variant="ghost"
@@ -154,7 +216,6 @@ const AdvertiserFileList = () => {
                 </Button>
               </div>
             </div>
-
             {/* Expandable edit section */}
             {expandedId === file.id && (
               <div className="bg-gray-50 rounded-lg p-6 mt-2 border border-gray-200">
@@ -169,7 +230,6 @@ const AdvertiserFileList = () => {
                       className="bg-white border-gray-300"
                     />
                   </div>
-
                   {/* Status Dropdown */}
                   <div className="space-y-2">
                     <Label className="text-pink-600 font-medium">Status in der uppr Performance Platform</Label>
@@ -182,12 +242,11 @@ const AdvertiserFileList = () => {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="pending">offen</SelectItem>
-                        <SelectItem value="active">ausgeführt</SelectItem>
+                        <SelectItem value="approved">ausgeführt</SelectItem>
                         <SelectItem value="rejected">abgelehnt</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
                   {/* Additional Feedback */}
                   <div className="space-y-2 md:col-span-2">
                     <Label className="text-pink-600 font-medium">Sonstiges Feedback</Label>
@@ -200,7 +259,6 @@ const AdvertiserFileList = () => {
                     />
                   </div>
                 </div>
-
                 {/* Action Buttons */}
                 <div className="flex justify-end space-x-3 mt-6">
                   <Button
