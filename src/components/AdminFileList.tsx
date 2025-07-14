@@ -37,17 +37,27 @@ interface UserWithCompany {
 
 // Define the props type for AdminFileList
 interface AdminFileListProps {
-  uploads: UploadItem[];
   advertisers: Advertiser[];
   onGrantAccess: (uploadId: number, advertiserId: number, expiresAt: Date) => Promise<void>;
 }
 
-const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListProps) => {
+const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   const { toast } = useToast();
   
   // Temporäre Auswahl für Dropdown-Werte
   const [tempAssignments, setTempAssignments] = useState<Record<number, number>>({});
   const [allUsers, setAllUsers] = useState<UserWithCompany[]>([]);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+
+  // Funktion zum Neuladen der Uploads
+  const reloadUploads = useCallback(() => {
+    uploadService.getUploads().then(setUploads);
+  }, []);
+
+  // Lade Uploads initial
+  useEffect(() => {
+    reloadUploads();
+  }, [reloadUploads]);
 
   useEffect(() => {
     api.get("/users").then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
@@ -125,6 +135,8 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
         description: `Datei wurde zugewiesen`,
       });
 
+      reloadUploads(); // <-- Upload-Liste neu laden
+
       // Temporäre Auswahl entfernen
       setTempAssignments(prev => {
         const newTemp = { ...prev };
@@ -133,7 +145,7 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
       });
 
     } catch (error) {
-       toast({
+      toast({
         title: "Fehler bei Zuweisung",
         description: "Die Zuweisung konnte nicht durchgeführt werden",
         variant: "destructive",
@@ -204,7 +216,7 @@ const AdminFileList = ({ uploads, advertisers, onGrantAccess }: AdminFileListPro
               {new Date(file.upload_date).toLocaleDateString()}
             </div>
             <div className="col-span-2 text-gray-800">
-              {getCompanyByEmail(file.last_modified_by || file.uploaded_by)}
+              {file.last_modified_by || file.uploaded_by}
             </div>
             <div className="col-span-2">
               {file.status === 'pending' ? (

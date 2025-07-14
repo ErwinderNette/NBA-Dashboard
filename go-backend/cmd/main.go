@@ -76,6 +76,7 @@ func main() {
 	// Add new routes
 	app.Get("/api/uploads", handlers.AuthRequired(), handleGetUploads)
 	app.Get("/api/advertisers", handlers.AuthRequired(), handleGetAdvertisers)
+	app.Get("/api/users", handlers.AuthRequired(), handleGetUsers) // NEU
 	app.Post("/api/uploads/:id/access", handlers.AuthRequired(), handleGrantAccessDB)
 	app.Get("/api/uploads/:id/download", handlers.AuthRequired(), handleDownloadFile)
 	app.Patch("/api/uploads/:id/status", handlers.AuthRequired(), handleUpdateUploadStatus)
@@ -117,12 +118,13 @@ func handleFileUpload(c *fiber.Ctx) error {
 	}
 
 	upload := models.Upload{
-		Filename:    file.Filename,
-		FileSize:    file.Size,
-		ContentType: file.Header.Get("Content-Type"),
-		UploadedBy:  userEmail,
-		Status:      "pending",
-		FilePath:    filename,
+		Filename:       file.Filename,
+		FileSize:       file.Size,
+		ContentType:    file.Header.Get("Content-Type"),
+		UploadedBy:     userEmail,
+		LastModifiedBy: userEmail,
+		Status:         "pending",
+		FilePath:       filename,
 	}
 	if err := db.Create(&upload).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save upload in DB"})
@@ -197,7 +199,41 @@ func handleGetUploads(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to fetch uploads"})
 	}
 
-	return c.JSON(uploads)
+	// Mapping: UploadID -> AdvertiserID (nur letzter Eintrag zählt)
+	var accesses []UploadAccess
+	db.Find(&accesses)
+	m := map[uint]uint{}
+	for _, a := range accesses {
+		m[a.UploadID] = a.AdvertiserID
+	}
+
+	// Hole alle User (für E-Mail)
+	var users []models.User
+	db.Find(&users)
+	userMap := map[uint]string{}
+	for _, u := range users {
+		userMap[u.ID] = u.Email
+	}
+
+	// Baue Response mit assigned_advertiser_email
+	type UploadWithAdvertiser struct {
+		models.Upload
+		AssignedAdvertiserEmail *string `json:"assigned_advertiser_email"`
+	}
+	var uploadsWithAdvertiser []UploadWithAdvertiser
+	for _, u := range uploads {
+		var emailPtr *string
+		if advID, ok := m[u.ID]; ok {
+			if email, ok2 := userMap[advID]; ok2 {
+				emailPtr = &email
+			}
+		}
+		uploadsWithAdvertiser = append(uploadsWithAdvertiser, UploadWithAdvertiser{
+			Upload:                  u,
+			AssignedAdvertiserEmail: emailPtr,
+		})
+	}
+	return c.JSON(uploadsWithAdvertiser)
 }
 
 // Handle get advertisers
@@ -208,9 +244,27 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 	var result []fiber.Map
 	for _, a := range advertisers {
 		result = append(result, fiber.Map{
-			"id":    a.ID,
-			"name":  a.Name,
-			"email": a.Email,
+			"id":      a.ID,
+			"name":    a.Name,
+			"email":   a.Email,
+			"company": a.Company,
+		})
+	}
+	return c.JSON(result)
+}
+
+// Liefert alle User mit Company
+func handleGetUsers(c *fiber.Ctx) error {
+	var users []models.User
+	db.Find(&users)
+	var result []fiber.Map
+	for _, u := range users {
+		result = append(result, fiber.Map{
+			"id":      u.ID,
+			"name":    u.Name,
+			"email":   u.Email,
+			"company": u.Company,
+			"role":    u.Role,
 		})
 	}
 	return c.JSON(result)
@@ -250,6 +304,11 @@ func handleGrantAccessDB(c *fiber.Ctx) error {
 	}
 	if err := db.Create(&access).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to grant access"})
+	}
+
+	// Setze Status auf 'assigned'
+	if err := db.Model(&models.Upload{}).Where("id = ?", uploadID).Update("status", "assigned").Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload status"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Access granted successfully"})
@@ -437,6 +496,10 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	upload.ContentType = file.Header.Get("Content-Type")
 	upload.FilePath = filename
 	upload.UpdatedAt = time.Now()
+	upload.LastModifiedBy = userEmail
+	if role == "advertiser" {
+		upload.Status = "feedback"
+	}
 	if err := db.Save(&upload).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload in DB"})
 	}

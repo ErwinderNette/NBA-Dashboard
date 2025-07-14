@@ -16,6 +16,7 @@ type User struct {
 	Email        string         `gorm:"uniqueIndex;not null"`
 	PasswordHash string         `gorm:"not null"`
 	Role         string         `gorm:"not null"` // z.B. "admin", "advertiser", "publisher"
+	Company      string         `gorm:"not null;default:''" json:"company"`
 	CreatedAt    time.Time      `gorm:"autoCreateTime"`
 	UpdatedAt    time.Time      `gorm:"autoUpdateTime"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
