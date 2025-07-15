@@ -54,4 +54,14 @@ export const uploadService = {
   deleteUpload: async (uploadId: number): Promise<void> => {
     await api.delete(`/uploads/${uploadId}`);
   },
+
+  // Datei an Publisher zurückschicken
+  returnToPublisher: async (uploadId: number): Promise<void> => {
+    await api.post(`/uploads/${uploadId}/return-to-publisher`);
+  },
+
+  // Datei abschließen
+  completeUpload: async (uploadId: number): Promise<void> => {
+    await api.patch(`/uploads/${uploadId}/status`, { status: 'completed' });
+  },
 }; 

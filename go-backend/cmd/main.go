@@ -67,7 +67,7 @@ func main() {
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "http://localhost:4173,http://localhost:8080",
 		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
-		AllowMethods: "GET, POST, PUT, DELETE, OPTIONS",
+		AllowMethods: "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 	}))
 
 	// Routes
@@ -82,6 +82,7 @@ func main() {
 	app.Patch("/api/uploads/:id/status", handlers.AuthRequired(), handleUpdateUploadStatus)
 	app.Delete("/api/uploads/:id", handlers.AuthRequired(), handleDeleteUpload)
 	app.Post("/api/uploads/:id/replace", handlers.AuthRequired(), handleReplaceUpload)
+	app.Post("/api/uploads/:id/return-to-publisher", handlers.AuthRequired(), handlers.HandleReturnToPublisher(db))
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
@@ -374,9 +375,6 @@ func handleUpdateUploadStatus(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 	}
 	role := claims["role"].(string)
-	if role != "admin" {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can update status"})
-	}
 
 	id := c.Params("id")
 	var body struct {
@@ -385,8 +383,18 @@ func handleUpdateUploadStatus(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
 	}
-	if body.Status != "approved" && body.Status != "rejected" {
+	if body.Status != "approved" && body.Status != "rejected" && body.Status != "completed" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid status value"})
+	}
+
+	if body.Status == "completed" {
+		if role != "publisher" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only publisher can complete uploads"})
+		}
+	} else {
+		if role != "admin" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can update status"})
+		}
 	}
 
 	if err := db.Model(&models.Upload{}).Where("id = ?", id).Update("status", body.Status).Error; err != nil {

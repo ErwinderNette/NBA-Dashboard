@@ -27,9 +27,10 @@ interface FileItem {
 interface FileListProps {
   files: FileItem[];
   onDelete?: (file: FileItem) => void;
+  onComplete?: (file: FileItem) => void; // NEU: Callback für Abschluss
 }
 
-const FileList = ({ files, onDelete }: FileListProps) => {
+const FileList = ({ files, onDelete, onComplete }: FileListProps) => {
   const getStatusColor = (statusColor?: string) => {
     return statusColor || 'bg-pink-500';
   };
@@ -75,20 +76,21 @@ const FileList = ({ files, onDelete }: FileListProps) => {
         <h3 className="text-xl font-semibold text-gray-800 mb-6">Aktueller Stand</h3>
         <div className="space-y-1">
           {/* Header */}
-          <div className="grid grid-cols-[40px,2fr,1.2fr,1.2fr,1fr,1fr] gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
+          <div className="grid grid-cols-[40px,2fr,1.2fr,1.2fr,1fr,1fr,1fr] gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
             <div>Löschen</div>
             <div>Dateiname</div>
             <div>Upload Datum</div>
             <div>Advertiser</div>
             <div>Status</div>
             <div>Download</div>
+            <div>Aktionen</div> {/* NEU */}
           </div>
           {/* File rows */}
           {(files ?? []).length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
           {(files ?? []).map((file, index) => (
             <div
               key={index}
-              className={`grid grid-cols-[40px,2fr,1.2fr,1.2fr,1fr,1fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center relative ${file.status === 'pending' ? 'text-gray-400' : ''}`}
+              className={`grid grid-cols-[40px,2fr,1.2fr,1.2fr,1fr,1fr,1fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center relative ${file.status === 'pending' ? 'text-gray-400' : ''}`}
             >
               {/* Overlay für pending entfernt */}
               <div className="flex justify-center">
@@ -125,6 +127,19 @@ const FileList = ({ files, onDelete }: FileListProps) => {
                 >
                   <ArrowDown size={16} className="text-blue-600" />
                 </Button>
+              </div>
+              {/* NEU: Aktionen-Spalte */}
+              <div className="flex justify-center">
+                {file.status === 'returned_to_publisher' && onComplete ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-green-600 border-green-600 hover:bg-green-50"
+                    onClick={() => onComplete(file)}
+                  >
+                    Abschließen
+                  </Button>
+                ) : null}
               </div>
             </div>
           ))}

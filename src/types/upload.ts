@@ -5,7 +5,7 @@ export interface UploadItem {
   file_size: number;
   content_type: string;
   uploaded_by: string;
-  status: 'pending' | 'approved' | 'rejected' | 'granted';
+  status: 'pending' | 'approved' | 'rejected' | 'granted' | 'returned_to_publisher' | 'completed';
   advertiser_count?: number;
 }
 
