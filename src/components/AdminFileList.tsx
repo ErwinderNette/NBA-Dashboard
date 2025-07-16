@@ -18,6 +18,7 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 
 // Define types for the data structures based on the backend
 interface UploadItem {
@@ -276,7 +277,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
             <div>Aktionen</div>
           </div>
           {/* File rows */}
-          {(uploads ?? []).map((file) => (
+          {(uploads ?? []).filter(file => file.status !== 'completed').map((file) => (
             <div 
               key={file.id}
               className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center"
@@ -372,6 +373,70 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
           ))}
         </div>
       </div>
+      {/* Accordion für abgeschlossene Dateien */}
+      <Accordion type="single" collapsible className="mt-10">
+        <AccordionItem value="completed-files" className="bg-white rounded-2xl shadow-lg p-6">
+          <AccordionTrigger className="text-xl font-semibold text-gray-800 mb-4">Abgeschlossene Dateien</AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-1">
+              <div className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
+                <div>Löschen</div>
+                <div>Dateiname</div>
+                <div>Upload Datum</div>
+                <div>bearbeitet von</div>
+                <div>Kunde</div>
+                <div>Status</div>
+                <div>Aktionen</div>
+              </div>
+              {(uploads ?? []).filter(file => file.status === 'completed').length === 0 && (
+                <div className="py-4 text-gray-500">Keine abgeschlossenen Dateien gefunden.</div>
+              )}
+              {(uploads ?? []).filter(file => file.status === 'completed').map((file) => (
+                <div
+                  key={file.id}
+                  className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center"
+                >
+                  <div /> {/* Keine Löschaktion */}
+                  <div className="text-gray-800 font-medium truncate max-w-[350px] cursor-pointer" title={file.filename}>
+                    {file.filename}
+                  </div>
+                  <div className="text-gray-600">
+                    {new Date(file.upload_date).toLocaleDateString()}
+                  </div>
+                  <div className="text-gray-800">
+                    {file.last_modified_by || file.uploaded_by}
+                  </div>
+                  <div>
+                    {(() => {
+                      const email = file.assigned_advertiser_email;
+                      if (!email) return 'Unbekannt';
+                      const user = allUsers.find(u => u.email === email);
+                      return user?.company || 'Unbekannt';
+                    })()}
+                  </div>
+                  <div className="flex items-center">
+                    <div
+                      className={`w-3 h-3 rounded-full bg-green-500`}
+                      title="Abgeschlossen"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDownload(file.id, file.filename)}
+                      className="p-1 h-8 w-8 hover:bg-gray-200"
+                      title="Datei herunterladen"
+                    >
+                      <ArrowDown size={16} className="text-gray-600" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </>
   );
 };
