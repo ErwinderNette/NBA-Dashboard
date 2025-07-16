@@ -14,6 +14,7 @@ import {
 import { uploadService } from '@/services/uploadService';
 import { UploadItem } from '@/types/upload';
 import { useToast } from "@/hooks/use-toast";
+import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from "@/components/ui/alert-dialog";
 
 const AdvertiserFileList = () => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -28,6 +29,8 @@ const AdvertiserFileList = () => {
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
   const [selectedFiles, setSelectedFiles] = useState<Record<number, File | null>>({});
   const [isUploading, setIsUploading] = useState<Record<number, boolean>>({});
+  const [uploadConfirmOpen, setUploadConfirmOpen] = useState<Record<number, boolean>>({});
+  const [pendingUploadId, setPendingUploadId] = useState<number | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -174,27 +177,76 @@ const AdvertiserFileList = () => {
                   onChange={e => handleFileChange(file.id, e)}
                   accept=".csv,.xls,.xlsx,.pdf,.doc,.docx,.png,.jpg,.jpeg"
                 />
-                <button
-                  className="text-blue-600 underline text-sm"
-                  onClick={() => fileInputs.current[file.id]?.click()}
-                  type="button"
-                  disabled={isUploading[file.id]}
-                >
-                  Ersetzen
-                </button>
-                {selectedFiles[file.id] && (
-                  <div className="flex items-center space-x-2 mt-1">
-                    <span className="text-xs text-gray-700 truncate max-w-[100px]">{selectedFiles[file.id]?.name}</span>
+                <div className="rounded-xl shadow border border-gray-100 bg-white px-2 py-1 flex flex-col items-center gap-1 w-full max-w-[320px] mx-auto">
+                  {selectedFiles[file.id] ? (
+                    <div className="flex flex-col items-center w-full">
+                      <div className="flex flex-row items-center justify-center w-full">
+                        <button
+                          className="flex-shrink-0 flex items-center gap-1 bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded-lg text-xs transition disabled:opacity-50"
+                          onClick={() => { setPendingUploadId(file.id); setUploadConfirmOpen(prev => ({ ...prev, [file.id]: true })); }}
+                          type="button"
+                          disabled={isUploading[file.id]}
+                          style={{ minWidth: '90px' }}
+                        >
+                          {isUploading[file.id] ? (
+                            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12" /></svg>
+                          )}
+                          Hochladen
+                        </button>
+                        <AlertDialog open={!!uploadConfirmOpen[file.id]} onOpenChange={open => setUploadConfirmOpen(prev => ({ ...prev, [file.id]: open }))}>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Upload bestätigen</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Bist du sicher, dass du diese Datei hochladen und an den Publisher & uppr zurückschicken möchtest?
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel onClick={() => setUploadConfirmOpen(prev => ({ ...prev, [file.id]: false }))}>Abbrechen</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => { setUploadConfirmOpen(prev => ({ ...prev, [file.id]: false })); handleReplaceFile(file.id); }}>Hochladen</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                        <button
+                          className="flex-shrink-0 flex items-center justify-center bg-gray-200 hover:bg-gray-300 text-gray-600 rounded-full p-1 ml-2 mr-2"
+                          onClick={() => { setSelectedFiles(prev => ({ ...prev, [file.id]: null })); if (fileInputs.current[file.id]) fileInputs.current[file.id]!.value = ''; }}
+                          type="button"
+                          title="Auswahl entfernen"
+                          style={{ width: '28px', height: '28px' }}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </button>
+                      </div>
+                      <span
+                        className="mt-2 flex items-center gap-1 bg-gray-100 rounded px-2 py-1 text-xs text-gray-700 w-full justify-center text-center max-w-[300px] truncate"
+                        title={selectedFiles[file.id]?.name}
+                        style={{ minWidth: 0 }}
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h16v16H4z" /></svg>
+                        {selectedFiles[file.id]?.name}
+                      </span>
+                    </div>
+                  ) : (
                     <button
-                      className="ml-2 bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700"
-                      onClick={() => handleReplaceFile(file.id)}
+                      className="flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline text-sm transition"
+                      onClick={() => fileInputs.current[file.id]?.click()}
                       type="button"
                       disabled={isUploading[file.id]}
                     >
-                      {isUploading[file.id] ? 'Hochladen...' : 'Hochladen'}
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12" /></svg>
+                      Ersetzen
                     </button>
-                  </div>
-                )}
+                  )}
+                  {isUploading[file.id] && (
+                    <div className="w-full mt-1">
+                      <div className="h-1 bg-blue-200 rounded">
+                        <div className="h-1 bg-blue-500 rounded animate-pulse" style={{ width: '100%' }} />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
               {/* Download */}
               <div className="col-span-1 flex items-center space-x-2">
