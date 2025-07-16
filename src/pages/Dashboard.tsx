@@ -18,7 +18,12 @@ const Dashboard = () => {
     try {
       const uploads = await uploadService.getUploads();
       // Offene und abgeschlossene Dateien trennen
-      const open = uploads.filter(u => u.status === 'returned_to_publisher' || u.status === 'pending');
+      const open = uploads.filter(u =>
+        u.status === 'pending' ||
+        u.status === 'returned_to_publisher' ||
+        u.status === 'assigned' ||
+        u.status === 'feedback'
+      );
       const completed = uploads.filter(u => u.status === 'completed');
       setFiles(open);
       setCompletedFiles(completed);
