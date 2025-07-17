@@ -15,15 +15,20 @@ import { uploadService } from '@/services/uploadService';
 import { UploadItem } from '@/types/upload';
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from "@/components/ui/alert-dialog";
+import api from '@/services/api';
 
-const AdvertiserFileList = () => {
+interface AdvertiserFileListProps {
+  uploads?: UploadItem[];
+}
+
+const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Record<number, {
     feedback: string;
     status: string;
     additionalFeedback: string;
   }>>({});
-  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [uploads, setUploads] = useState<UploadItem[]>(uploadsProp || []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
@@ -32,8 +37,14 @@ const AdvertiserFileList = () => {
   const [uploadConfirmOpen, setUploadConfirmOpen] = useState<Record<number, boolean>>({});
   const [pendingUploadId, setPendingUploadId] = useState<number | null>(null);
   const { toast } = useToast();
+  const [allUsers, setAllUsers] = useState<{email: string, company: string}[]>([]);
 
   useEffect(() => {
+    if (uploadsProp) {
+      setUploads(uploadsProp);
+      setIsLoading(false);
+      return;
+    }
     const fetchUploads = async () => {
       setIsLoading(true);
       setError(null);
@@ -47,10 +58,51 @@ const AdvertiserFileList = () => {
       }
     };
     fetchUploads();
+  }, [uploadsProp]);
+
+  useEffect(() => {
+    api.get('/users').then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
   }, []);
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'assigned':
+        return 'NBA eingegangen';
+      case 'feedback':
+        return 'Feedback eingereicht';
+      case 'returned_to_publisher':
+        return 'Publisher eingegangen';
+      case 'completed':
+        return 'Abgeschlossen';
+      case 'nba_received':
+        return 'NBA eingegangen';
+      case 'feedback_submitted':
+        return 'Feedback eingereicht';
+      case 'pending':
+        return 'offen';
+      case 'approved':
+        return 'ausgeführt';
+      case 'rejected':
+        return 'abgelehnt';
+      default:
+        return status;
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      case 'assigned':
+        return 'bg-pink-600'; // magenta
+      case 'feedback':
+        return 'bg-yellow-400'; // gelb
+      case 'returned_to_publisher':
+        return 'bg-sky-300'; // hellblau
+      case 'completed':
+        return 'bg-green-500'; // grün
+      case 'nba_received':
+        return 'bg-gray-400';
+      case 'feedback_submitted':
+        return 'bg-blue-500';
       case 'approved':
       case 'granted':
         return 'bg-pink-500';
@@ -163,10 +215,14 @@ const AdvertiserFileList = () => {
                 {file.upload_date ? new Date(file.upload_date).toLocaleDateString('de-DE') : ''}
               </div>
               <div className="col-span-3 text-gray-800">
-                {file.uploaded_by}
+                {(() => {
+                  const user = allUsers.find(u => u.email === file.uploaded_by);
+                  return user?.company || file.uploaded_by;
+                })()}
               </div>
               <div className="col-span-2 flex items-center">
                 <div className={`w-3 h-3 rounded-full ${getStatusColor(file.status)}`}></div>
+                <span className="ml-2 text-sm">{getStatusLabel(file.status)}</span>
               </div>
               {/* Upload/Ersetzen */}
               <div className="col-span-1 flex flex-col items-start space-y-1">
@@ -230,10 +286,11 @@ const AdvertiserFileList = () => {
                     </div>
                   ) : (
                     <button
-                      className="flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline text-sm transition"
+                      className={`flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline text-sm transition${file.status === 'returned_to_publisher' ? ' opacity-50 cursor-not-allowed' : ''}`}
                       onClick={() => fileInputs.current[file.id]?.click()}
                       type="button"
-                      disabled={isUploading[file.id]}
+                      disabled={isUploading[file.id] || file.status === 'returned_to_publisher'}
+                      title={file.status === 'returned_to_publisher' ? 'Datei kann nicht mehr ersetzt werden' : undefined}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12" /></svg>
                       Ersetzen
