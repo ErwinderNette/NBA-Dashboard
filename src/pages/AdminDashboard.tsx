@@ -101,7 +101,7 @@ const AdminDashboard = () => {
         <AdminFileList 
           uploads={uploads}
           advertisers={advertisers}
-          onGrantAccess={handleGrantAccess}
+          onGrantAccess={handleGrantAccess}s
         />
       </div>
     </div>

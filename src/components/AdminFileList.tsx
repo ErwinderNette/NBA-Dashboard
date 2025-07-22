@@ -69,9 +69,11 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     uploadService.getUploads().then(setUploads);
   }, []);
 
-  // Lade Uploads initial
+  // Lade Uploads initial und setze Polling für regelmäßiges Reload
   useEffect(() => {
     reloadUploads();
+    const interval = setInterval(reloadUploads, 10000); // alle 10 Sekunden
+    return () => clearInterval(interval);
   }, [reloadUploads]);
 
   useEffect(() => {
@@ -107,6 +109,8 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       case 'assigned':
         return 'Zugewiesen';
       case 'feedback':
+        return 'Feedback eingereicht';
+      case 'feedback_submitted':
         return 'Feedback eingereicht';
       case 'pending':
         return 'Ausstehend';
@@ -363,8 +367,8 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                   size="sm"
                   onClick={() => handleReturnToPublisher(file.id)}
                   className="p-1 h-8 w-8 hover:bg-blue-200"
-                  disabled={!((file.status === 'assigned' || file.status === 'feedback') && allUsers.find(u => u.email === file.last_modified_by)?.role === 'advertiser')}
-                  title={((file.status === 'assigned' || file.status === 'feedback') && allUsers.find(u => u.email === file.last_modified_by)?.role === 'advertiser') ? "Datei an Publisher zurückschicken" : "Nur möglich, wenn die Datei vom Advertiser bearbeitet wurde und Status 'zugewiesen' oder 'Feedback eingereicht' ist"}
+                  disabled={!((file.status === 'assigned' || file.status === 'feedback_submitted') && allUsers.find(u => u.email === file.last_modified_by)?.role === 'advertiser')}
+                  title={((file.status === 'assigned' || file.status === 'feedback_submitted') && allUsers.find(u => u.email === file.last_modified_by)?.role === 'advertiser') ? "Datei an Publisher zurückschicken" : "Nur möglich, wenn die Datei vom Advertiser bearbeitet wurde und Status 'zugewiesen' oder 'Feedback eingereicht' ist"}
                 >
                   <ArrowUp size={16} className="text-blue-600" />
                 </Button>

@@ -112,11 +112,13 @@ const FileList = ({ files, onDelete, onComplete }: FileListProps) => {
                 {file.status === 'pending' ? (
                   <span className="text-pink-600 font-semibold">In Bearbeitung</span>
                 ) : file.status === 'returned_to_publisher' ? (
-                  <span className="text-blue-400 font-semibold">Feedback erhalten</span>
+                  <span className="text-green-600 font-semibold">Feedback erhalten</span>
                 ) : file.status === 'assigned' ? (
                   <span className="text-yellow-600 font-semibold">Prüfung Advertiser</span>
                 ) : file.status === 'feedback' ? (
-                  <span className="text-green-600 font-semibold">Verarbeitung ins Netzwerk</span>
+                  <span className="text-blue-400 font-semibold">Verarbeitung ins Netzwerk</span>
+                ) : file.status === 'feedback_submitted' ? (
+                  <span className="text-blue-400 font-semibold">Verarbeitung ins Netzwerk</span>
                 ) : (
                   <div className={`w-3 h-3 rounded-full ${getStatusColor(file.statusColor)}`}></div>
                 )}

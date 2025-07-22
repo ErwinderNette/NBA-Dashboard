@@ -506,7 +506,7 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	upload.UpdatedAt = time.Now()
 	upload.LastModifiedBy = userEmail
 	if role == "advertiser" {
-		upload.Status = "feedback"
+		upload.Status = "feedback_submitted"
 	}
 	if err := db.Save(&upload).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload in DB"})

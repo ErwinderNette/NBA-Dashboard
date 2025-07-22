@@ -16,9 +16,9 @@ func HandleReturnToPublisher(db *gorm.DB) fiber.Handler {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Upload nicht gefunden"})
 		}
 
-		// Zusätzliche Prüfung: Nur wenn Status 'assigned' ODER 'feedback' und letzter Bearbeiter Advertiser ist
-		if upload.Status != "assigned" && upload.Status != "feedback" {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Datei kann nur im Status 'assigned' oder 'feedback' zurückgeschickt werden"})
+		// Zusätzliche Prüfung: Nur wenn Status 'assigned', 'feedback' ODER 'feedback_submitted' und letzter Bearbeiter Advertiser ist
+		if upload.Status != "assigned" && upload.Status != "feedback" && upload.Status != "feedback_submitted" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Datei kann nur im Status 'assigned', 'feedback' oder 'feedback_submitted' zurückgeschickt werden"})
 		}
 		var user models.User
 		if err := db.Where("email = ?", upload.LastModifiedBy).First(&user).Error; err != nil {

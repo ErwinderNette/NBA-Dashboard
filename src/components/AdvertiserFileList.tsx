@@ -70,14 +70,14 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
         return 'NBA eingegangen';
       case 'feedback':
         return 'Feedback eingereicht';
+      case 'feedback_submitted':
+        return 'Feedback eingereicht';
       case 'returned_to_publisher':
         return 'Publisher eingegangen';
       case 'completed':
         return 'Abgeschlossen';
       case 'nba_received':
         return 'NBA eingegangen';
-      case 'feedback_submitted':
-        return 'Feedback eingereicht';
       case 'pending':
         return 'offen';
       case 'approved':

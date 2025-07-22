@@ -22,7 +22,8 @@ const Dashboard = () => {
         u.status === 'pending' ||
         u.status === 'returned_to_publisher' ||
         u.status === 'assigned' ||
-        u.status === 'feedback'
+        u.status === 'feedback' ||
+        u.status === 'feedback_submitted'
       );
       const completed = uploads.filter(u => u.status === 'completed');
       setFiles(open);
