@@ -129,6 +129,7 @@ go build → Binary auf Server, Port 3001
 
 ## 📝 Lizenz
 
+uppr GmbH
 desörf
 
 ---
