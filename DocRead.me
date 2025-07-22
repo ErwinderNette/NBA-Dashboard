@@ -1,0 +1,319 @@
+# NBA Dashboard – Technische Dokumentation
+
+## Überblick
+
+Das NBA Dashboard ist eine moderne Webanwendung zur Verwaltung und Analyse von NBA-Daten. Es besteht aus einem React-Frontend (TypeScript) und einem Go-Backend (Fiber). Die Anwendung unterstützt verschiedene Benutzerrollen (Admin, Advertiser, Publisher), ein Datei-Upload-System, Kampagnenmanagement und eine sichere Authentifizierung.
+
+---
+
+## Architektur
+
+```mermaid
+flowchart TD
+    User["Benutzer<br/>(Admin/Advertiser/Publisher)"]
+    subgraph Frontend ["React (Vite, TypeScript)"]
+      LoginPage["Login-Seite"]
+      Dashboard["Dashboard"]
+      UploadArea["Datei-Upload"]
+      FileList["Dateiliste"]
+      CampaignSelector["Kampagnen-Auswahl"]
+    end
+    subgraph Backend ["Go (Fiber)"]
+      API["REST API"]
+      Auth["Authentifizierung"]
+      UploadHandler["Upload-Handler"]
+      DB["PostgreSQL"]
+    end
+    User -- HTTP(S) --> Frontend
+    Frontend -- REST/JSON --> Backend
+    Backend -- SQL --> DB
+```
+
+---
+
+## Datenbankmodell
+
+```mermaid
+erDiagram
+  User {
+    uint ID
+    string Name
+    string Email
+    string PasswordHash
+    string Role
+    string Company
+    datetime CreatedAt
+    datetime UpdatedAt
+  }
+  Upload {
+    uint ID
+    string Filename
+    datetime UploadDate
+    int64 FileSize
+    string ContentType
+    string UploadedBy
+    string Status
+    string FilePath
+    string LastModifiedBy
+    datetime CreatedAt
+    datetime UpdatedAt
+  }
+  UploadAccess {
+    uint ID
+    uint UploadID
+    uint AdvertiserID
+    datetime ExpiresAt
+    datetime CreatedAt
+  }
+  User ||--o{ Upload : "uploaded_by (email)"
+  User ||--o{ UploadAccess : "advertiser_id"
+  Upload ||--o{ UploadAccess : "upload_id"
+```
+
+---
+
+## User-Flows (Ablaufdiagramm)
+
+```mermaid
+sequenceDiagram
+  participant FE as Frontend (React)
+  participant BE as Backend (Go/Fiber)
+  participant DB as Datenbank (PostgreSQL)
+
+  Note over FE,BE: Login-Flow
+  FE->>BE: POST /api/login {email, password}
+  BE->>DB: Suche User, Passwort-Prüfung
+  BE-->>FE: {token, role, name, email}
+  FE->>FE: Speichere Token, Rolle, Routing
+
+  Note over FE,BE: Datei-Upload
+  FE->>BE: POST /api/upload (FormData, JWT)
+  BE->>DB: Speichere Upload-Metadaten
+  BE-->>FE: Upload-Bestätigung
+
+  Note over FE,BE: Datei-Status ändern (Admin)
+  FE->>BE: PATCH /api/uploads/:id/status {status} (JWT)
+  BE->>DB: Update Status
+  BE-->>FE: Status-Bestätigung
+
+  Note over FE,BE: Datei-Download
+  FE->>BE: GET /api/uploads/:id/download (JWT)
+  BE->>DB: Prüfe Berechtigung
+  BE-->>FE: Datei-Download (Blob)
+```
+
+---
+
+## Hauptfunktionen & Zusammenspiel
+
+### 1. Authentifizierung & Rollen
+
+- **Login:**  
+  Benutzer melden sich über das Frontend an (`/login`). Die Zugangsdaten werden an das Backend gesendet, das die Authentifizierung übernimmt und ein JWT-Token zurückgibt.
+- **Rollen:**  
+  - **Admin:** Sieht alle Uploads, kann Dateien zuweisen, löschen, Status ändern.
+  - **Advertiser:** Sieht und bearbeitet nur eigene/zugewiesene Uploads.
+  - **Publisher:** (Optional) Kann eigene Dateien hochladen und Status einsehen.
+
+**Ablauf:**  
+Frontend speichert das Token und die Rolle im LocalStorage. Routen werden je nach Rolle geschützt und weitergeleitet.
+
+---
+
+### 2. Datei-Upload & Verwaltung
+
+- **Upload:**  
+  Über die Komponente `UploadArea` können Nutzer Dateien hochladen. Die Datei wird per POST an `/api/upload` im Backend gesendet.
+- **Speicherung:**  
+  Das Backend speichert die Datei im `uploads/`-Verzeichnis und legt einen Datensatz in der Datenbank an (`models.Upload`).
+- **Anzeige:**  
+  Die Komponente `FileList` zeigt alle relevanten Uploads an, gefiltert nach Status und Rolle.
+- **Status-Management:**  
+  Admins können den Status von Uploads ändern (z.B. "pending", "completed", "returned_to_publisher").
+
+---
+
+### 3. Kampagnen-Management
+
+- **Kampagnen-Auswahl:**  
+  Über die Komponente `CampaignSelector` können Nutzer eine Kampagne wählen. Die Bestellungen/Uploads werden entsprechend gefiltert.
+- **API-Integration:**  
+  Die Kampagnen- und Bestelldaten werden über das Backend bereitgestellt.
+
+---
+
+## API-Endpunkte & Beispiel-Requests
+
+### Authentifizierung
+
+**POST /api/login**
+
+_Request:_
+```json
+{
+  "email": "admin@mail.de",
+  "password": "admin"
+}
+```
+_Response:_
+```json
+{
+  "token": "<JWT>",
+  "role": "admin",
+  "name": "Admin",
+  "email": "admin@mail.de"
+}
+```
+
+---
+
+### Datei-Upload
+
+**POST /api/upload**
+
+- Header: `Authorization: Bearer <JWT>`
+- Body: `multipart/form-data` mit Feld `file`
+
+_Response:_
+```json
+{
+  "message": "File uploaded successfully",
+  "filename": "test.xlsx",
+  "path": "uploads/test.xlsx",
+  "uploadId": 1
+}
+```
+
+---
+
+### Upload-Liste
+
+**GET /api/uploads**
+
+- Header: `Authorization: Bearer <JWT>`
+
+_Response:_
+```json
+[
+  {
+    "id": 1,
+    "filename": "test.xlsx",
+    "upload_date": "2024-06-13T12:00:00Z",
+    "file_size": 12345,
+    "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "uploaded_by": "admin@mail.de",
+    "status": "pending",
+    "file_path": "uploads/test.xlsx",
+    "last_modified_by": "admin@mail.de",
+    "created_at": "2024-06-13T12:00:00Z",
+    "updated_at": "2024-06-13T12:00:00Z"
+  }
+]
+```
+
+---
+
+### Status ändern
+
+**PATCH /api/uploads/:id/status**
+
+- Header: `Authorization: Bearer <JWT>`
+- Body:
+```json
+{
+  "status": "approved"
+}
+```
+_Response:_
+```json
+{
+  "message": "Status updated successfully"
+}
+```
+
+---
+
+### Datei-Download
+
+**GET /api/uploads/:id/download**
+
+- Header: `Authorization: Bearer <JWT>`
+- Response: Datei-Download (Blob)
+
+---
+
+### Zugriff gewähren (Admin)
+
+**POST /api/uploads/:id/access**
+
+- Header: `Authorization: Bearer <JWT>`
+- Body:
+```json
+{
+  "advertiserId": 2,
+  "expiresAt": "2024-12-31T23:59:59Z"
+}
+```
+_Response:_
+```json
+{
+  "message": "Access granted successfully"
+}
+```
+
+---
+
+### Datei ersetzen
+
+**POST /api/uploads/:id/replace**
+
+- Header: `Authorization: Bearer <JWT>`
+- Body: `multipart/form-data` mit Feld `file`
+
+---
+
+### Datei an Publisher zurückgeben
+
+**POST /api/uploads/:id/return-to-publisher**
+
+- Header: `Authorization: Bearer <JWT>`
+- Response:
+```json
+{
+  "message": "Upload an Publisher zurückgeschickt",
+  "upload": { ... }
+}
+```
+
+---
+
+## Sicherheit
+
+- **JWT-Authentifizierung:** Alle geschützten Routen prüfen das Token.
+- **CORS:** Nur erlaubte Ursprünge (z.B. Frontend-URL) dürfen auf die API zugreifen.
+- **Datei-Upload:** Validierung und sichere Speicherung im Backend.
+
+---
+
+## Entwicklung & Deployment
+
+- **Frontend:**  
+  - Entwicklung: `npm run dev`
+  - Build: `npm run build`
+- **Backend:**  
+  - Entwicklung: `go run cmd/main.go`
+  - Build: `go build`
+- **Datenbank:**  
+  - Docker-Compose für PostgreSQL
+
+---
+
+## Erweiterbarkeit
+
+- Neue Rollen und Rechte können im Backend-Modell ergänzt werden.
+- Weitere Upload-Typen oder Status sind einfach erweiterbar.
+- Frontend-Komponenten sind modular und wiederverwendbar.
+
+---
+
+**Autor:** erwski 
