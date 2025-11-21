@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/csv"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"nba-dashboard/internal/config"
@@ -18,6 +20,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
+	"github.com/xuri/excelize/v2"
 )
 
 var db *gorm.DB
@@ -83,6 +86,8 @@ func main() {
 	app.Delete("/api/uploads/:id", handlers.AuthRequired(), handleDeleteUpload)
 	app.Post("/api/uploads/:id/replace", handlers.AuthRequired(), handleReplaceUpload)
 	app.Post("/api/uploads/:id/return-to-publisher", handlers.AuthRequired(), handlers.HandleReturnToPublisher(db))
+	app.Get("/api/uploads/:id/content", handlers.AuthRequired(), handleGetFileContent)
+	app.Post("/api/uploads/:id/content", handlers.AuthRequired(), handleSaveFileContent)
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
@@ -513,4 +518,217 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "File replaced successfully"})
+}
+
+// Handle get file content
+func handleGetFileContent(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
+
+	id := c.Params("id")
+	var upload models.Upload
+	if err := db.First(&upload, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+	}
+
+	// Berechtigung prüfen
+	if role != "admin" {
+		if upload.UploadedBy != userEmail {
+			if role == "advertiser" {
+				var user models.User
+				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+				}
+				var access UploadAccess
+				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+				}
+			} else {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+			}
+		}
+	}
+
+	// Datei lesen und parsen
+	filePath := upload.FilePath
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	var data [][]string
+	var err error
+
+	if ext == ".csv" {
+		data, err = readCSV(filePath)
+	} else if ext == ".xlsx" || ext == ".xls" {
+		data, err = readExcel(filePath)
+	} else {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported file type"})
+	}
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file: " + err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"data":     data,
+		"filename": upload.Filename,
+	})
+}
+
+// Handle save file content
+func handleSaveFileContent(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
+
+	id := c.Params("id")
+	var upload models.Upload
+	if err := db.First(&upload, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+	}
+
+	// Berechtigung prüfen
+	if role != "admin" {
+		if upload.UploadedBy != userEmail {
+			if role == "advertiser" {
+				var user models.User
+				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+				}
+				var access UploadAccess
+				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+				}
+			} else {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+			}
+		}
+	}
+
+	// Request Body parsen
+	var body struct {
+		Data [][]string `json:"data"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+
+	// Datei schreiben
+	filePath := upload.FilePath
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	var err error
+	if ext == ".csv" {
+		err = writeCSV(filePath, body.Data)
+	} else if ext == ".xlsx" || ext == ".xls" {
+		err = writeExcel(filePath, body.Data)
+	} else {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Unsupported file type"})
+	}
+
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save file: " + err.Error()})
+	}
+
+	// Upload-Metadaten aktualisieren
+	upload.LastModifiedBy = userEmail
+	upload.UpdatedAt = time.Now()
+	if role == "advertiser" {
+		upload.Status = "feedback_submitted"
+	}
+	db.Save(&upload)
+
+	return c.JSON(fiber.Map{"message": "File saved successfully"})
+}
+
+// Hilfsfunktionen
+func readCSV(filePath string) ([][]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	// Versuche zuerst mit Semikolon, dann mit Komma
+	reader.Comma = ';'
+	data, err := reader.ReadAll()
+	if err != nil || (len(data) > 0 && len(data[0]) == 1 && strings.Contains(data[0][0], ",")) {
+		// Versuche mit Komma - Datei neu öffnen
+		file.Close()
+		file, err = os.Open(filePath)
+		if err != nil {
+			return nil, err
+		}
+		reader = csv.NewReader(file)
+		reader.LazyQuotes = true
+		reader.TrimLeadingSpace = true
+		reader.Comma = ','
+		data, err = reader.ReadAll()
+	}
+
+	return data, err
+}
+
+func writeCSV(filePath string, data [][]string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	// Verwende Semikolon als Standard (deutsches Format)
+	writer.Comma = ';'
+	defer writer.Flush()
+
+	return writer.WriteAll(data)
+}
+
+func readExcel(filePath string) ([][]string, error) {
+	f, err := excelize.OpenFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	sheetName := f.GetSheetName(0)
+	rows, err := f.GetRows(sheetName)
+	return rows, err
+}
+
+func writeExcel(filePath string, data [][]string) error {
+	f := excelize.NewFile()
+	defer f.Close()
+
+	sheetName := "Sheet1"
+	for i, row := range data {
+		for j, cell := range row {
+			cellName, _ := excelize.CoordinatesToCellName(j+1, i+1)
+			f.SetCellValue(sheetName, cellName, cell)
+		}
+	}
+
+	return f.SaveAs(filePath)
 }

@@ -64,4 +64,15 @@ export const uploadService = {
   completeUpload: async (uploadId: number): Promise<void> => {
     await api.patch(`/uploads/${uploadId}/status`, { status: 'completed' });
   },
+
+  // Datei-Inhalt lesen
+  getFileContent: async (uploadId: number): Promise<{ data: string[][], filename: string }> => {
+    const response = await api.get(`/uploads/${uploadId}/content`);
+    return response.data;
+  },
+
+  // Datei-Inhalt speichern
+  saveFileContent: async (uploadId: number, data: string[][]): Promise<void> => {
+    await api.post(`/uploads/${uploadId}/content`, { data });
+  },
 }; 

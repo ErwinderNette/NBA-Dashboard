@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ArrowDown, Edit } from "lucide-react";
+import { ArrowDown, Edit, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,6 +38,10 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const [pendingUploadId, setPendingUploadId] = useState<number | null>(null);
   const { toast } = useToast();
   const [allUsers, setAllUsers] = useState<{email: string, company: string}[]>([]);
+  const [fileData, setFileData] = useState<Record<number, string[][]>>({});
+  const [originalFileData, setOriginalFileData] = useState<Record<number, string[][]>>({});
+  const [isLoadingFile, setIsLoadingFile] = useState<Record<number, boolean>>({});
+  const [isSavingFile, setIsSavingFile] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (uploadsProp) {
@@ -115,8 +119,40 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     }
   };
 
-  const handleExpand = (id: number) => {
-    setExpandedId(expandedId === id ? null : id);
+  const handleExpand = async (id: number) => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    
+    setExpandedId(id);
+    
+    // Lade Datei-Inhalt wenn noch nicht geladen
+    if (!fileData[id]) {
+      setIsLoadingFile(prev => ({ ...prev, [id]: true }));
+      try {
+        const result = await uploadService.getFileContent(id);
+        // Sicherstellen, dass data ein Array ist und alle Zeilen Arrays sind
+        const safeData = Array.isArray(result.data) 
+          ? result.data.filter(row => row !== null && row !== undefined).map(row => 
+              Array.isArray(row) ? row : []
+            )
+          : [];
+        setFileData(prev => ({ ...prev, [id]: safeData }));
+        setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(safeData)) }));
+      } catch (err) {
+        toast({
+          title: "Fehler",
+          description: "Datei konnte nicht geladen werden.",
+          variant: "destructive",
+        });
+        setExpandedId(null);
+      } finally {
+        setIsLoadingFile(prev => ({ ...prev, [id]: false }));
+      }
+    }
+    
+    // Initialisiere Feedback-Daten falls noch nicht vorhanden
     if (!editData[id]) {
       setEditData(prev => ({
         ...prev,
@@ -139,10 +175,57 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     }));
   };
 
-  const handleSave = (id: number) => {
-    console.log(`Saving data for file ${id}:`, editData[id]);
+  const handleSave = async (id: number) => {
+    // Speichere Datei-Daten wenn vorhanden
+    if (fileData[id]) {
+      setIsSavingFile(prev => ({ ...prev, [id]: true }));
+      try {
+        await uploadService.saveFileContent(id, fileData[id]);
+        setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(fileData[id])) }));
+        toast({
+          title: "Erfolg",
+          description: "Datei wurde erfolgreich gespeichert.",
+        });
+        // Lade Uploads neu
+        const allUploads = await uploadService.getUploads();
+        setUploads(allUploads);
+      } catch (err) {
+        toast({
+          title: "Fehler",
+          description: "Datei konnte nicht gespeichert werden.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsSavingFile(prev => ({ ...prev, [id]: false }));
+      }
+    }
+    
+    // Speichere Feedback-Daten (falls später implementiert)
+    console.log(`Saving feedback for file ${id}:`, editData[id]);
     setExpandedId(null);
-    // Hier würde später der API-Call erfolgen
+  };
+
+  const handleCellChange = (fileId: number, rowIndex: number, colIndex: number, value: string) => {
+    const currentData = fileData[fileId] || [];
+    const newData = [...currentData];
+    
+    // Stelle sicher, dass die Zeile existiert und ein Array ist
+    if (!newData[rowIndex] || !Array.isArray(newData[rowIndex])) {
+      newData[rowIndex] = [];
+    }
+    
+    // Stelle sicher, dass die Spalte existiert
+    while (newData[rowIndex].length <= colIndex) {
+      newData[rowIndex].push("");
+    }
+    
+    newData[rowIndex][colIndex] = value;
+    setFileData(prev => ({ ...prev, [fileId]: newData }));
+  };
+
+  const hasFileChanges = (fileId: number): boolean => {
+    if (!fileData[fileId] || !originalFileData[fileId]) return false;
+    return JSON.stringify(fileData[fileId]) !== JSON.stringify(originalFileData[fileId]);
   };
 
   const handleDownload = async (id: number, filename: string) => {
@@ -328,6 +411,127 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
             {/* Expandable edit section */}
             {expandedId === file.id && (
               <div className="bg-gray-50 rounded-lg p-6 mt-2 border border-gray-200">
+                {/* Datei-Inhalt Anzeige */}
+                {isLoadingFile[file.id] ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-pink-600" />
+                    <span className="ml-2 text-gray-600">Lade Datei...</span>
+                  </div>
+                ) : fileData[file.id] && Array.isArray(fileData[file.id]) && fileData[file.id].length > 0 ? (
+                  <div className="mb-6">
+                    <Label className="text-pink-600 font-medium mb-2 block text-xs">
+                      Datei-Inhalt bearbeiten ({fileData[file.id].length} Zeilen)
+                    </Label>
+                    <div className="overflow-auto max-h-[600px] border rounded-lg bg-white shadow-inner">
+                      <div className="sticky top-0 bg-gray-100 z-10 border-b">
+                        <table className="min-w-full border-collapse text-[10px]">
+                          <thead>
+                            <tr>
+                              <th className="border-r border-b p-0.5 bg-gray-100 text-gray-600 text-[10px] font-semibold w-8 text-center sticky left-0 bg-gray-100 z-20">
+                                #
+                              </th>
+                              {fileData[file.id][0] && Array.isArray(fileData[file.id][0]) ? 
+                                fileData[file.id][0].map((_, colIndex) => {
+                                  // Bestimme die Hintergrundfarbe basierend auf der Spalte
+                                  let bgColor = "bg-gray-100"; // Standard: Grau
+                                  let textColor = "text-gray-600";
+                                  
+                                  if (colIndex <= 10) {
+                                    // A-K (Index 0-10): Blau
+                                    bgColor = "bg-blue-500";
+                                    textColor = "text-white";
+                                  } else if (colIndex >= 11 && colIndex <= 14) {
+                                    // L-O (Index 11-14): Magenta
+                                    bgColor = "bg-[#e91e63]";
+                                    textColor = "text-white";
+                                  } else {
+                                    // Rest (ab Index 15): Grau
+                                    bgColor = "bg-gray-300";
+                                    textColor = "text-gray-700";
+                                  }
+                                  
+                                  return (
+                                    <th 
+                                      key={colIndex} 
+                                      className={`border-r border-b p-0.5 ${bgColor} ${textColor} text-[10px] font-semibold w-[70px]`}
+                                    >
+                                      {String.fromCharCode(65 + (colIndex % 26))}
+                                      {colIndex >= 26 ? Math.floor(colIndex / 26) : ''}
+                                    </th>
+                                  );
+                                }) : null
+                              }
+                              <th className="border-r border-b p-0.5 bg-gray-100 text-gray-600 text-[10px] font-semibold w-8"></th>
+                            </tr>
+                          </thead>
+                        </table>
+                      </div>
+                      <table className="min-w-full border-collapse text-[10px]">
+                        <tbody>
+                          {fileData[file.id].filter(row => row && Array.isArray(row)).map((row, rowIndex) => (
+                            <tr key={rowIndex} className="border-b hover:bg-gray-50 transition-colors">
+                              <td className="border-r p-0.5 bg-gray-50 text-gray-500 text-[10px] font-medium text-center sticky left-0 bg-gray-50 z-10 w-8">
+                                {rowIndex + 1}
+                              </td>
+                              {row && Array.isArray(row) ? row.map((cell, colIndex) => (
+                                <td key={colIndex} className="border-r p-0">
+                                  <Input
+                                    value={cell || ""}
+                                    onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
+                                    className="border-0 focus-visible:ring-1 h-6 text-[10px] px-1 py-0.5 w-[70px] leading-tight"
+                                    placeholder=""
+                                  />
+                                </td>
+                              )) : null}
+                              {/* Leere Zelle für neue Spalten */}
+                              <td className="border-r p-0 w-8">
+                                <Input
+                                  value=""
+                                  onChange={(e) => {
+                                    if (e.target.value && row && Array.isArray(row)) {
+                                      handleCellChange(file.id, rowIndex, row.length, e.target.value);
+                                    }
+                                  }}
+                                  placeholder="+"
+                                  className="border-0 focus-visible:ring-1 h-6 w-full text-[10px] px-1"
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                          {/* Neue Zeile hinzufügen */}
+                          <tr className="bg-gray-50">
+                            <td colSpan={(fileData[file.id] && fileData[file.id][0] && Array.isArray(fileData[file.id][0]) ? fileData[file.id][0].length : 0) + 2} className="p-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  const currentData = fileData[file.id] || [];
+                                  const colCount = currentData[0] && Array.isArray(currentData[0]) ? currentData[0].length : 1;
+                                  const newRow = new Array(colCount).fill("");
+                                  setFileData(prev => ({
+                                    ...prev,
+                                    [file.id]: [...(prev[file.id] || []), newRow]
+                                  }));
+                                }}
+                                className="w-full text-[10px] h-6 px-2"
+                              >
+                                + Neue Zeile
+                              </Button>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      💡 Scrollen Sie horizontal und vertikal, um alle Spalten zu sehen.
+                    </p>
+                  </div>
+                ) : fileData[file.id] ? (
+                  <div className="mb-6 text-gray-500 text-[10px]">
+                    <p>Datei ist leer oder konnte nicht geladen werden.</p>
+                  </div>
+                ) : null}
+                
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {/* Feedback Input */}
                   <div className="space-y-2">
@@ -374,14 +578,26 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                     variant="outline"
                     onClick={() => setExpandedId(null)}
                     className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                    disabled={isSavingFile[file.id]}
                   >
                     Abbrechen
                   </Button>
                   <Button
                     onClick={() => handleSave(file.id)}
                     className="bg-pink-600 hover:bg-pink-700 text-white"
+                    disabled={isSavingFile[file.id] || (fileData[file.id] && !hasFileChanges(file.id))}
                   >
-                    Speichern
+                    {isSavingFile[file.id] ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Speichern...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        Speichern
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
