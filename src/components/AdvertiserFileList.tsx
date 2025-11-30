@@ -16,6 +16,7 @@ import { UploadItem } from '@/types/upload';
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import api from '@/services/api';
+import { validationStorage } from '@/utils/validationStorage';
 
 interface AdvertiserFileListProps {
   uploads?: UploadItem[];
@@ -42,8 +43,38 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const [originalFileData, setOriginalFileData] = useState<Record<number, string[][]>>({});
   const [isLoadingFile, setIsLoadingFile] = useState<Record<number, boolean>>({});
   const [isSavingFile, setIsSavingFile] = useState<Record<number, boolean>>({});
+  // ✅ Validierungsergebnisse für Zeilenfärbung
+  const [validationData, setValidationData] = useState<Record<number, any>>({});
 
   useEffect(() => {
+    // ✅ Lade zuerst Validierungen aus localStorage (sofort verfügbar, auch nach Reload)
+    const storedValidations = validationStorage.loadAll();
+    if (Object.keys(storedValidations).length > 0) {
+      console.log(`[AdvertiserFileList] Geladene Validierungen aus localStorage:`, Object.keys(storedValidations).length);
+      setValidationData(storedValidations);
+    }
+    
+    // ✅ Lade auch aus der DB (als Backup/Sync)
+    const loadAllValidations = async () => {
+      try {
+        const validations = await uploadService.getAllValidations();
+        const convertedValidations: Record<number, any> = {};
+        for (const [key, value] of Object.entries(validations)) {
+          const uploadId = parseInt(key, 10);
+          if (!isNaN(uploadId)) {
+            convertedValidations[uploadId] = value;
+            // ✅ Speichere auch in localStorage (als Backup/Sync)
+            validationStorage.save(uploadId, value);
+          }
+        }
+        setValidationData(prev => ({ ...prev, ...convertedValidations }));
+        console.log(`[AdvertiserFileList] Geladene Validierungen aus DB:`, Object.keys(convertedValidations).length);
+      } catch (err) {
+        console.error("[AdvertiserFileList] Fehler beim Laden der Validierungen:", err);
+      }
+    };
+    loadAllValidations();
+    
     if (uploadsProp) {
       setUploads(uploadsProp);
       setIsLoading(false);
@@ -54,7 +85,13 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
       setError(null);
       try {
         const allUploads = await uploadService.getUploads();
-        setUploads(allUploads); // KEIN Filter mehr!
+        // Sortiere nach upload_date (neueste zuerst)
+        const sortedUploads = [...allUploads].sort((a, b) => {
+          const dateA = a.upload_date ? new Date(a.upload_date).getTime() : 0;
+          const dateB = b.upload_date ? new Date(b.upload_date).getTime() : 0;
+          return dateB - dateA; // Absteigend (neueste zuerst)
+        });
+        setUploads(sortedUploads); // KEIN Filter mehr!
       } catch (err) {
         setError('Fehler beim Laden der Uploads.');
       } finally {
@@ -146,6 +183,30 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
       }
     }
     
+    // ✅ Lade Validierungsergebnisse (falls vorhanden) - zuerst localStorage, dann DB
+    if (!validationData[id]) {
+      // Versuche zuerst localStorage
+      const stored = validationStorage.load(id);
+      if (stored) {
+        console.log(`[AdvertiserFileList] Gespeicherte Validierung aus localStorage geladen für file ${id}`);
+        setValidationData(prev => ({ ...prev, [id]: stored }));
+      } else {
+        // Falls nicht in localStorage, versuche DB
+        try {
+          const validation = await uploadService.getValidation(id);
+          if (validation) {
+            console.log(`[AdvertiserFileList] Gespeicherte Validierung aus DB geladen für file ${id}`);
+            setValidationData(prev => ({ ...prev, [id]: validation }));
+            // Speichere auch in localStorage für nächstes Mal
+            validationStorage.save(id, validation);
+          }
+        } catch (err) {
+          // Keine Validierung vorhanden - das ist OK
+          console.log(`[AdvertiserFileList] Keine Validierung für file ${id}`);
+        }
+      }
+    }
+    
     // Initialisiere Feedback-Daten falls noch nicht vorhanden
     if (!editData[id]) {
       setEditData(prev => ({
@@ -182,7 +243,13 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
         });
         // Lade Uploads neu
         const allUploads = await uploadService.getUploads();
-        setUploads(allUploads);
+        // Sortiere nach upload_date (neueste zuerst)
+        const sortedUploads = [...allUploads].sort((a, b) => {
+          const dateA = a.upload_date ? new Date(a.upload_date).getTime() : 0;
+          const dateB = b.upload_date ? new Date(b.upload_date).getTime() : 0;
+          return dateB - dateA; // Absteigend (neueste zuerst)
+        });
+        setUploads(sortedUploads);
       } catch (err) {
         toast({
           title: "Fehler",
@@ -204,6 +271,10 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     if (!newData[rowIndex]) {
       newData[rowIndex] = [];
     }
+    // Stelle sicher, dass die Zeile genug Spalten hat
+    while (newData[rowIndex].length <= colIndex) {
+      newData[rowIndex].push("");
+    }
     newData[rowIndex][colIndex] = value;
     setFileData(prev => ({ ...prev, [fileId]: newData }));
   };
@@ -211,6 +282,71 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const hasFileChanges = (fileId: number): boolean => {
     if (!fileData[fileId] || !originalFileData[fileId]) return false;
     return JSON.stringify(fileData[fileId]) !== JSON.stringify(originalFileData[fileId]);
+  };
+
+  // ✅ holt den Status für eine gesamte Zeile aus validate-Response
+  const getRowStatus = (
+    fileId: number,
+    rowIndex: number
+  ): "offen" | "bestätigt" | "storniert" | "ausgezahlt" | null => {
+    const v = validationData[fileId];
+    if (!v?.rows) return null;
+    if (rowIndex === 0) return null; // Header-Zeile
+
+    const dataRow = v.rows[rowIndex - 1];
+    if (!dataRow?.cells) return null;
+
+    const statusCell = dataRow.cells["Status in der uppr Performance Platform"];
+    if (statusCell && typeof statusCell === "object" && "value" in statusCell) {
+      const statusValue = statusCell.value;
+      // Status-Werte: 0 - offen, 1 - bestätigt, 2 - storniert, 3 - ausgezahlt
+      if (statusValue === "offen" || statusValue === "0") return "offen";
+      if (statusValue === "bestätigt" || statusValue === "1") return "bestätigt";
+      if (statusValue === "storniert" || statusValue === "2") return "storniert";
+      if (statusValue === "ausgezahlt" || statusValue === "3") return "ausgezahlt";
+    }
+
+    return null;
+  };
+
+  // ✅ Gibt die CSS-Klasse für eine Zeile basierend auf dem Status zurück
+  const getRowStatusClass = (status: "offen" | "bestätigt" | "storniert" | "ausgezahlt" | null): string => {
+    switch (status) {
+      case "offen":
+        return "bg-yellow-50 hover:bg-yellow-100"; // Gelb für offen
+      case "bestätigt":
+        return "bg-green-50 hover:bg-green-100"; // Hellgrün für bestätigt
+      case "storniert":
+        return "bg-red-50 hover:bg-red-100"; // Hellrot für storniert
+      case "ausgezahlt":
+        return "bg-green-500 hover:bg-green-600 text-black"; // Dunkelgrün für ausgezahlt mit schwarzer Schrift
+      default:
+        return "hover:bg-gray-50"; // Standard
+    }
+  };
+
+  // ✅ Prüft, ob eine Spalte bearbeitbar ist (ab der zweiten "Ordertoken/OrderID" Spalte)
+  const isColumnEditable = (fileId: number, colIndex: number): boolean => {
+    const headerRow = fileData[fileId]?.[0];
+    if (!headerRow) return false;
+
+    // Finde alle "Ordertoken/OrderID" Spalten
+    const orderTokenColumns: number[] = [];
+    headerRow.forEach((header, idx) => {
+      const headerLower = (header || "").toLowerCase();
+      if (headerLower.includes("ordertoken") && headerLower.includes("order")) {
+        orderTokenColumns.push(idx);
+      }
+    });
+
+    // Wenn es mindestens 2 "Ordertoken/OrderID" Spalten gibt, ist ab der zweiten bearbeitbar
+    if (orderTokenColumns.length >= 2) {
+      const secondOrderTokenIndex = orderTokenColumns[1];
+      return colIndex >= secondOrderTokenIndex;
+    }
+
+    // Fallback: Wenn keine oder nur eine gefunden wurde, alles bearbeitbar lassen
+    return true;
   };
 
   const handleDownload = async (id: number, filename: string) => {
@@ -395,59 +531,110 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
             </div>
             {/* Expandable edit section */}
             {expandedId === file.id && (
-              <div className="bg-gray-50 rounded-lg p-6 mt-2 border border-gray-200">
+              <div className="bg-gray-50 rounded-lg p-8 mt-2 border border-gray-200">
                 {/* Datei-Inhalt Anzeige */}
                 {isLoadingFile[file.id] ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-8 w-8 animate-spin text-pink-600" />
                     <span className="ml-2 text-gray-600">Lade Datei...</span>
                   </div>
-                ) : fileData[file.id] ? (
+                ) : fileData[file.id] && fileData[file.id].length > 0 ? (
                   <div className="mb-6">
-                    <Label className="text-pink-600 font-medium mb-2 block">Datei-Inhalt bearbeiten</Label>
-                    <div className="overflow-auto max-h-96 border rounded-lg bg-white">
-                      <table className="min-w-full border-collapse">
+                    <Label className="text-pink-600 font-medium mb-3 block text-sm">
+                      {file.filename} ({fileData[file.id].length} Zeilen)
+                    </Label>
+
+                    <div className="overflow-auto max-h-[800px] border rounded-lg bg-white shadow-inner">
+                      <table className="min-w-full border-collapse text-sm">
                         <tbody>
-                          {fileData[file.id].map((row, rowIndex) => (
-                            <tr key={rowIndex} className="border-b">
-                              {row.map((cell, colIndex) => (
-                                <td key={colIndex} className="border-r p-1">
-                                  <Input
-                                    value={cell || ""}
-                                    onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
-                                    className="border-0 focus-visible:ring-1 h-8 text-sm"
-                                  />
-                                </td>
-                              ))}
-                              {/* Leere Zelle für neue Spalten */}
-                              <td className="border-r p-1">
-                                <Input
-                                  value=""
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      handleCellChange(file.id, rowIndex, row.length, e.target.value);
-                                    }
-                                  }}
-                                  placeholder="+"
-                                  className="border-0 focus-visible:ring-1 h-8 w-16 text-sm"
-                                />
-                              </td>
-                            </tr>
-                          ))}
+                          {(() => {
+                            // Berechne die maximale Anzahl von Spalten über alle Zeilen
+                            const maxCols = Math.max(
+                              ...fileData[file.id].filter(Array.isArray).map(row => row.length),
+                              1
+                            );
+                            
+                            return fileData[file.id].filter(Array.isArray).map((row, rowIndex) => {
+                              // Hole Status für die gesamte Zeile aus Validierungsergebnissen
+                              const rowStatus = getRowStatus(file.id, rowIndex);
+                              const rowStatusClass = getRowStatusClass(rowStatus);
+                              const isHeaderRow = rowIndex === 0;
+                              
+                              // Stelle sicher, dass die Zeile die maximale Anzahl von Spalten hat
+                              const paddedRow = [...row];
+                              while (paddedRow.length < maxCols) {
+                                paddedRow.push("");
+                              }
+                              
+                              return (
+                                <tr key={rowIndex} className={`border-b transition-colors ${isHeaderRow ? 'bg-blue-50' : rowStatusClass}`}>
+                                  <td className={`border-r p-2 text-sm font-semibold text-center sticky left-0 z-10 min-w-[50px] ${isHeaderRow ? 'bg-blue-100 text-blue-800' : 'bg-gray-50 text-gray-600'}`}>
+                                    {rowIndex + 1}
+                                  </td>
+
+                                  {paddedRow.map((cell, colIndex) => {
+                                    const editable = isColumnEditable(file.id, colIndex);
+                                    return (
+                                      <td key={colIndex} className="border-r p-1 border-gray-200">
+                                        <Input
+                                          value={cell || ""}
+                                          onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
+                                          readOnly={!editable}
+                                          className={`border border-gray-200 h-10 text-sm px-2 py-1 min-w-[140px] leading-normal ${
+                                            isHeaderRow 
+                                              ? editable
+                                                ? 'bg-blue-50 font-semibold hover:bg-blue-100'
+                                                : 'bg-blue-100 font-semibold text-gray-600 cursor-not-allowed'
+                                              : editable
+                                                ? 'bg-white hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-pink-500'
+                                                : 'bg-gray-100 text-gray-600 cursor-not-allowed'
+                                          }`}
+                                          placeholder=""
+                                        />
+                                      </td>
+                                    );
+                                  })}
+                                  {/* Zelle für neue Spalten */}
+                                  <td className="border-r p-1 border-gray-200">
+                                    <Input
+                                      value=""
+                                      onChange={(e) => {
+                                        if (e.target.value) {
+                                          handleCellChange(file.id, rowIndex, maxCols, e.target.value);
+                                        }
+                                      }}
+                                      placeholder="+"
+                                      className="border border-gray-200 focus-visible:ring-2 focus-visible:ring-pink-500 h-10 w-20 text-sm bg-gray-50 hover:bg-gray-100"
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })()}
                           {/* Neue Zeile hinzufügen */}
                           <tr>
-                            <td colSpan={fileData[file.id][0]?.length || 1} className="p-1">
+                            <td colSpan={(() => {
+                              const maxCols = Math.max(
+                                ...fileData[file.id].filter(Array.isArray).map(row => row.length),
+                                1
+                              );
+                              return maxCols + 2; // +1 für Zeilennummer, +1 für "+" Spalte
+                            })()} className="p-2">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
-                                  const newRow = new Array(fileData[file.id][0]?.length || 1).fill("");
+                                  const maxCols = Math.max(
+                                    ...fileData[file.id].filter(Array.isArray).map(row => row.length),
+                                    1
+                                  );
+                                  const newRow = new Array(maxCols).fill("");
                                   setFileData(prev => ({
                                     ...prev,
                                     [file.id]: [...(prev[file.id] || []), newRow]
                                   }));
                                 }}
-                                className="w-full text-xs"
+                                className="w-full text-sm py-2"
                               >
                                 + Neue Zeile
                               </Button>
@@ -456,28 +643,36 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                         </tbody>
                       </table>
                     </div>
+
+                    <p className="text-sm text-gray-500 mt-2">
+                      💡 Scrollen Sie horizontal und vertikal, um alle Spalten zu sehen.
+                    </p>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="mb-6 text-gray-500 text-sm">
+                    <p>Datei ist leer oder konnte nicht geladen werden.</p>
+                  </div>
+                )}
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                   {/* Feedback Input */}
-                  <div className="space-y-2">
-                    <Label className="text-pink-600 font-medium">Feedback</Label>
+                  <div className="space-y-3">
+                    <Label className="text-pink-600 font-semibold text-base">Feedback</Label>
                     <Input
                       value={editData[file.id]?.feedback || ''}
                       onChange={(e) => handleInputChange(file.id, 'feedback', e.target.value)}
                       placeholder="Feedback eingeben..."
-                      className="bg-white border-gray-300"
+                      className="bg-white border-gray-300 h-11 text-base"
                     />
                   </div>
                   {/* Status Dropdown */}
-                  <div className="space-y-2">
-                    <Label className="text-pink-600 font-medium">Status in der uppr Performance Platform</Label>
+                  <div className="space-y-3">
+                    <Label className="text-pink-600 font-semibold text-base">Status in der uppr Performance Platform</Label>
                     <Select
                       value={editData[file.id]?.status || 'pending'}
                       onValueChange={(value) => handleInputChange(file.id, 'status', value)}
                     >
-                      <SelectTrigger className="bg-white border-gray-300">
+                      <SelectTrigger className="bg-white border-gray-300 h-11 text-base">
                         <SelectValue placeholder="Status auswählen" />
                       </SelectTrigger>
                       <SelectContent>
@@ -488,40 +683,40 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                     </Select>
                   </div>
                   {/* Additional Feedback */}
-                  <div className="space-y-2 md:col-span-2">
-                    <Label className="text-pink-600 font-medium">Sonstiges Feedback</Label>
+                  <div className="space-y-3 md:col-span-2">
+                    <Label className="text-pink-600 font-semibold text-base">Sonstiges Feedback</Label>
                     <Textarea
                       value={editData[file.id]?.additionalFeedback || ''}
                       onChange={(e) => handleInputChange(file.id, 'additionalFeedback', e.target.value)}
                       placeholder="Zusätzliches Feedback eingeben..."
-                      rows={3}
-                      className="bg-white border-gray-300"
+                      rows={4}
+                      className="bg-white border-gray-300 text-base min-h-[100px]"
                     />
                   </div>
                 </div>
                 {/* Action Buttons */}
-                <div className="flex justify-end space-x-3 mt-6">
+                <div className="flex justify-end space-x-4 mt-8">
                   <Button
                     variant="outline"
                     onClick={() => setExpandedId(null)}
-                    className="border-gray-300 text-gray-700 hover:bg-gray-100"
+                    className="border-gray-300 text-gray-700 hover:bg-gray-100 h-11 px-6 text-base"
                     disabled={isSavingFile[file.id]}
                   >
                     Abbrechen
                   </Button>
                   <Button
                     onClick={() => handleSave(file.id)}
-                    className="bg-pink-600 hover:bg-pink-700 text-white"
+                    className="bg-pink-600 hover:bg-pink-700 text-white h-11 px-6 text-base"
                     disabled={isSavingFile[file.id] || (fileData[file.id] && !hasFileChanges(file.id))}
                   >
                     {isSavingFile[file.id] ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                         Speichern...
                       </>
                     ) : (
                       <>
-                        <Save className="mr-2 h-4 w-4" />
+                        <Save className="mr-2 h-5 w-5" />
                         Speichern
                       </>
                     )}
