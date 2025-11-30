@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { ArrowDown, ArrowUp, X as LucideX, Edit, Save, Loader2, ArrowRight } from "lucide-react";
+import { ArrowDown, ArrowUp, X as LucideX, Edit, Save, Loader2, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import React from "react";
 import { uploadService } from '@/services/uploadService';
 import api from "@/services/api";
+import { validationStorage } from '@/utils/validationStorage';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -113,11 +114,46 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     uploadService.getUploads().then(setUploads);
   }, []);
 
+  // ✅ Lade alle Validierungsergebnisse beim Laden der Uploads
+  const loadAllValidations = useCallback(async () => {
+    try {
+      const validations = await uploadService.getAllValidations();
+      // Konvertiere die Keys von String zu Number (weil Backend uint zurückgibt)
+      const convertedValidations: Record<number, any> = {};
+      for (const [key, value] of Object.entries(validations)) {
+        const uploadId = parseInt(key, 10);
+        if (!isNaN(uploadId)) {
+          convertedValidations[uploadId] = value;
+          // ✅ Speichere auch in localStorage (als Backup/Sync)
+          validationStorage.save(uploadId, value);
+        }
+      }
+      setValidationData(prev => ({ ...prev, ...convertedValidations }));
+      console.log(`[loadAllValidations] Geladene Validierungen aus DB:`, Object.keys(convertedValidations).length);
+    } catch (err) {
+      console.error("[loadAllValidations] Fehler beim Laden der Validierungen:", err);
+    }
+  }, []);
+
   useEffect(() => {
     reloadUploads();
-    const interval = setInterval(reloadUploads, 10000);
+    
+    // ✅ Lade zuerst Validierungen aus localStorage (sofort verfügbar, auch nach Reload)
+    const storedValidations = validationStorage.loadAll();
+    if (Object.keys(storedValidations).length > 0) {
+      console.log(`[AdminFileList] Geladene Validierungen aus localStorage:`, Object.keys(storedValidations).length);
+      setValidationData(storedValidations);
+    }
+    
+    // ✅ Dann auch aus der DB laden (als Backup/Sync)
+    loadAllValidations();
+    
+    const interval = setInterval(() => {
+      reloadUploads();
+      loadAllValidations();
+    }, 10000);
     return () => clearInterval(interval);
-  }, [reloadUploads]);
+  }, [reloadUploads, loadAllValidations]);
 
   useEffect(() => {
     api.get("/users").then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
@@ -275,49 +311,60 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       }
     }
 
-    // 2) Validation immer frisch laden
+    // 2) Validation laden - NUR gespeicherte Validierungen laden, KEINE automatische Validierung
+    // ✅ Validierungsergebnisse werden bereits beim Laden der Seite geladen (loadAllValidations + localStorage)
+    // ✅ Falls noch nicht geladen, versuche sie jetzt zu laden (zuerst localStorage, dann DB)
+    if (!validationData[id]) {
+      // Versuche zuerst localStorage
+      const stored = validationStorage.load(id);
+      if (stored) {
+        console.log(`[handleExpand] Gespeicherte Validierung aus localStorage geladen für file ${id}`);
+        setValidationData(prev => ({ ...prev, [id]: stored }));
+      } else {
+        // Falls nicht in localStorage, versuche DB
+        try {
+          const v = await uploadService.getValidation(id);
+          if (v) {
+            console.log(`[handleExpand] Gespeicherte Validierung aus DB geladen für file ${id}`);
+            setValidationData(prev => ({ ...prev, [id]: v }));
+            // Speichere auch in localStorage für nächstes Mal
+            validationStorage.save(id, v);
+          }
+        } catch (err: any) {
+          // Keine Validierung vorhanden - das ist OK, wird beim Klick auf "Aktualisieren" durchgeführt
+          console.log(`[handleExpand] Keine gespeicherte Validierung für file ${id}`);
+        }
+      }
+    }
+  };
+
+  // ✅ Manuelle Aktualisierung der Validierung
+  const handleRefreshValidation = async (id: number) => {
     setIsValidating(prev => ({ ...prev, [id]: true }));
     setValidationError(prev => ({ ...prev, [id]: null }));
 
     validationIntervalsRef.current[id] = startFakeProgress(id);
 
     try {
+      // ✅ Führe neue Validierung durch (wird automatisch im Backend gespeichert)
       const v = await uploadService.validateUpload(id);
       stopFakeProgress(id, 100);
-      console.log(`[handleExpand] Validation response for file ${id}:`, v);
-      if (v?.rows && v.rows.length > 0) {
-        console.log(`[handleExpand] First row cells:`, v.rows[0]?.cells);
-        console.log(`[handleExpand] First row cells keys:`, v.rows[0]?.cells ? Object.keys(v.rows[0].cells) : []);
-        // ✅ NEU: Prüfe explizit nach Status
-        const statusKey = "Status in der uppr Performance Platform";
-        if (v.rows[0]?.cells?.[statusKey]) {
-          console.log(`[handleExpand] ✅ Status gefunden:`, v.rows[0].cells[statusKey]);
-        } else {
-          console.log(`[handleExpand] ❌ Status NICHT gefunden!`);
-          console.log(`[handleExpand] Alle Keys:`, Object.keys(v.rows[0]?.cells || {}));
-          console.log(`[handleExpand] Cells-Objekt:`, JSON.stringify(v.rows[0]?.cells, null, 2));
-        }
-      }
-      setValidationData(prev => {
-        const newData = { ...prev, [id]: v };
-        console.log(`[handleExpand] Setting validation data for file ${id}`);
-        console.log(`[handleExpand] New validationData keys:`, Object.keys(newData));
-        console.log(`[handleExpand] New validationData[${id}]:`, newData[id]);
-        return newData;
+      
+      // ✅ Speichere die neuen Validierungsergebnisse im State
+      setValidationData(prev => ({ ...prev, [id]: v }));
+      
+      // ✅ Speichere auch in localStorage (für Browser-Reload)
+      validationStorage.save(id, v);
+      
+      toast({
+        title: "Validierung aktualisiert",
+        description: "Die Validierung wurde erfolgreich aktualisiert und gespeichert.",
       });
-      // ✅ Debug: Prüfe ob Validierungsdaten gesetzt wurden
-      console.log(`[handleExpand] Validation data set for file ${id}`);
-      console.log(`[handleExpand] validationData[${id}] after set:`, validationData[id]); // ⚠️ Das wird noch den alten Wert zeigen!
-      // ✅ Besser: Prüfe direkt nach dem Setzen
-      setTimeout(() => {
-        console.log(`[handleExpand] validationData[${id}] after timeout:`, validationData[id]);
-      }, 100);
     } catch (err: any) {
       stopFakeProgress(id, 0);
-
       const detail =
-        err?.response?.data?.detail ||
         err?.response?.data?.error ||
+        err?.response?.data?.detail ||
         err?.message ||
         "Validation fehlgeschlagen";
 
@@ -384,6 +431,9 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     if (fileToDelete) {
       try {
         await uploadService.deleteUpload(fileToDelete.id);
+        
+        // ✅ Entferne auch Validierungsergebnisse aus localStorage
+        validationStorage.remove(fileToDelete.id);
         toast({
           title: "Datei gelöscht",
           description: `${fileToDelete.filename} wurde erfolgreich gelöscht.`,
@@ -748,9 +798,25 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                     </div>
                   ) : fileData[file.id] && fileData[file.id].length > 0 ? (
                     <div className="mb-6">
-                      <Label className="text-pink-600 font-medium mb-2 block text-xs">
-                        {file.filename} ({fileData[file.id].length} Zeilen)
-                      </Label>
+                      <div className="flex items-center justify-between mb-2">
+                        <Label className="text-pink-600 font-medium text-xs">
+                          {file.filename} ({fileData[file.id].length} Zeilen)
+                        </Label>
+                        {/* ✅ Aktualisieren-Button - immer anzeigen, Validierung nur auf Klick */}
+                        {!isValidating[file.id] && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRefreshValidation(file.id)}
+                            className="h-7 text-[10px] px-2"
+                          >
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            {validationData[file.id]?.rows && validationData[file.id].rows.length > 0 
+                              ? "Aktualisieren" 
+                              : "Mit Netzwerk vergleichen"}
+                          </Button>
+                        )}
+                      </div>
 
                       {isValidating[file.id] && (
                         <div className="mb-3">
