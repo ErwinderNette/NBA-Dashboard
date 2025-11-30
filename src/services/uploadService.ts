@@ -75,4 +75,25 @@ export const uploadService = {
   saveFileContent: async (uploadId: number, data: string[][]): Promise<void> => {
     await api.post(`/uploads/${uploadId}/content`, { data });
   },
+
+  
+    // Validation für Admin-Preview (mit Debug)
+    validateUpload: async (uploadId: number): Promise<any> => {
+      try {
+        const response = await api.get(`/uploads/${uploadId}/validate`, {
+          timeout: 120000, // 120s, weil API-Call groß sein kann
+        });
+        console.log("✅ validateUpload response", response.data);
+        return response.data;
+      } catch (err: any) {
+        console.error("❌ validateUpload error", {
+          message: err?.message,
+          status: err?.response?.status,
+          data: err?.response?.data,
+          url: err?.config?.url,
+          baseURL: err?.config?.baseURL,
+        });
+        throw err;
+      }
+    },
 }; 

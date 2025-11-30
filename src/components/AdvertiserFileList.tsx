@@ -132,14 +132,8 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
       setIsLoadingFile(prev => ({ ...prev, [id]: true }));
       try {
         const result = await uploadService.getFileContent(id);
-        // Sicherstellen, dass data ein Array ist und alle Zeilen Arrays sind
-        const safeData = Array.isArray(result.data) 
-          ? result.data.filter(row => row !== null && row !== undefined).map(row => 
-              Array.isArray(row) ? row : []
-            )
-          : [];
-        setFileData(prev => ({ ...prev, [id]: safeData }));
-        setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(safeData)) }));
+        setFileData(prev => ({ ...prev, [id]: result.data }));
+        setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(result.data)) }));
       } catch (err) {
         toast({
           title: "Fehler",
@@ -206,19 +200,10 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   };
 
   const handleCellChange = (fileId: number, rowIndex: number, colIndex: number, value: string) => {
-    const currentData = fileData[fileId] || [];
-    const newData = [...currentData];
-    
-    // Stelle sicher, dass die Zeile existiert und ein Array ist
-    if (!newData[rowIndex] || !Array.isArray(newData[rowIndex])) {
+    const newData = [...(fileData[fileId] || [])];
+    if (!newData[rowIndex]) {
       newData[rowIndex] = [];
     }
-    
-    // Stelle sicher, dass die Spalte existiert
-    while (newData[rowIndex].length <= colIndex) {
-      newData[rowIndex].push("");
-    }
-    
     newData[rowIndex][colIndex] = value;
     setFileData(prev => ({ ...prev, [fileId]: newData }));
   };
@@ -417,103 +402,52 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                     <Loader2 className="h-8 w-8 animate-spin text-pink-600" />
                     <span className="ml-2 text-gray-600">Lade Datei...</span>
                   </div>
-                ) : fileData[file.id] && Array.isArray(fileData[file.id]) && fileData[file.id].length > 0 ? (
+                ) : fileData[file.id] ? (
                   <div className="mb-6">
-                    <Label className="text-pink-600 font-medium mb-2 block text-xs">
-                      Datei-Inhalt bearbeiten ({fileData[file.id].length} Zeilen)
-                    </Label>
-                    <div className="overflow-auto max-h-[600px] border rounded-lg bg-white shadow-inner">
-                      <div className="sticky top-0 bg-gray-100 z-10 border-b">
-                        <table className="min-w-full border-collapse text-[10px]">
-                          <thead>
-                            <tr>
-                              <th className="border-r border-b p-0.5 bg-gray-100 text-gray-600 text-[10px] font-semibold w-8 text-center sticky left-0 bg-gray-100 z-20">
-                                #
-                              </th>
-                              {fileData[file.id][0] && Array.isArray(fileData[file.id][0]) ? 
-                                fileData[file.id][0].map((_, colIndex) => {
-                                  // Bestimme die Hintergrundfarbe basierend auf der Spalte
-                                  let bgColor = "bg-gray-100"; // Standard: Grau
-                                  let textColor = "text-gray-600";
-                                  
-                                  if (colIndex <= 10) {
-                                    // A-K (Index 0-10): Blau
-                                    bgColor = "bg-blue-500";
-                                    textColor = "text-white";
-                                  } else if (colIndex >= 11 && colIndex <= 14) {
-                                    // L-O (Index 11-14): Magenta
-                                    bgColor = "bg-[#e91e63]";
-                                    textColor = "text-white";
-                                  } else {
-                                    // Rest (ab Index 15): Grau
-                                    bgColor = "bg-gray-300";
-                                    textColor = "text-gray-700";
-                                  }
-                                  
-                                  return (
-                                    <th 
-                                      key={colIndex} 
-                                      className={`border-r border-b p-0.5 ${bgColor} ${textColor} text-[10px] font-semibold w-[70px]`}
-                                    >
-                                      {String.fromCharCode(65 + (colIndex % 26))}
-                                      {colIndex >= 26 ? Math.floor(colIndex / 26) : ''}
-                                    </th>
-                                  );
-                                }) : null
-                              }
-                              <th className="border-r border-b p-0.5 bg-gray-100 text-gray-600 text-[10px] font-semibold w-8"></th>
-                            </tr>
-                          </thead>
-                        </table>
-                      </div>
-                      <table className="min-w-full border-collapse text-[10px]">
+                    <Label className="text-pink-600 font-medium mb-2 block">Datei-Inhalt bearbeiten</Label>
+                    <div className="overflow-auto max-h-96 border rounded-lg bg-white">
+                      <table className="min-w-full border-collapse">
                         <tbody>
-                          {fileData[file.id].filter(row => row && Array.isArray(row)).map((row, rowIndex) => (
-                            <tr key={rowIndex} className="border-b hover:bg-gray-50 transition-colors">
-                              <td className="border-r p-0.5 bg-gray-50 text-gray-500 text-[10px] font-medium text-center sticky left-0 bg-gray-50 z-10 w-8">
-                                {rowIndex + 1}
-                              </td>
-                              {row && Array.isArray(row) ? row.map((cell, colIndex) => (
-                                <td key={colIndex} className="border-r p-0">
+                          {fileData[file.id].map((row, rowIndex) => (
+                            <tr key={rowIndex} className="border-b">
+                              {row.map((cell, colIndex) => (
+                                <td key={colIndex} className="border-r p-1">
                                   <Input
                                     value={cell || ""}
                                     onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
-                                    className="border-0 focus-visible:ring-1 h-6 text-[10px] px-1 py-0.5 w-[70px] leading-tight"
-                                    placeholder=""
+                                    className="border-0 focus-visible:ring-1 h-8 text-sm"
                                   />
                                 </td>
-                              )) : null}
+                              ))}
                               {/* Leere Zelle für neue Spalten */}
-                              <td className="border-r p-0 w-8">
+                              <td className="border-r p-1">
                                 <Input
                                   value=""
                                   onChange={(e) => {
-                                    if (e.target.value && row && Array.isArray(row)) {
+                                    if (e.target.value) {
                                       handleCellChange(file.id, rowIndex, row.length, e.target.value);
                                     }
                                   }}
                                   placeholder="+"
-                                  className="border-0 focus-visible:ring-1 h-6 w-full text-[10px] px-1"
+                                  className="border-0 focus-visible:ring-1 h-8 w-16 text-sm"
                                 />
                               </td>
                             </tr>
                           ))}
                           {/* Neue Zeile hinzufügen */}
-                          <tr className="bg-gray-50">
-                            <td colSpan={(fileData[file.id] && fileData[file.id][0] && Array.isArray(fileData[file.id][0]) ? fileData[file.id][0].length : 0) + 2} className="p-1">
+                          <tr>
+                            <td colSpan={fileData[file.id][0]?.length || 1} className="p-1">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
-                                  const currentData = fileData[file.id] || [];
-                                  const colCount = currentData[0] && Array.isArray(currentData[0]) ? currentData[0].length : 1;
-                                  const newRow = new Array(colCount).fill("");
+                                  const newRow = new Array(fileData[file.id][0]?.length || 1).fill("");
                                   setFileData(prev => ({
                                     ...prev,
                                     [file.id]: [...(prev[file.id] || []), newRow]
                                   }));
                                 }}
-                                className="w-full text-[10px] h-6 px-2"
+                                className="w-full text-xs"
                               >
                                 + Neue Zeile
                               </Button>
@@ -522,13 +456,6 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                         </tbody>
                       </table>
                     </div>
-                    <p className="text-[10px] text-gray-500 mt-1">
-                      💡 Scrollen Sie horizontal und vertikal, um alle Spalten zu sehen.
-                    </p>
-                  </div>
-                ) : fileData[file.id] ? (
-                  <div className="mb-6 text-gray-500 text-[10px]">
-                    <p>Datei ist leer oder konnte nicht geladen werden.</p>
                   </div>
                 ) : null}
                 
