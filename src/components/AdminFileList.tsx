@@ -845,7 +845,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                               
                               return (
                               <tr key={rowIndex} className={`border-b transition-colors ${rowStatusClass}`}>
-                                <td className="border-r p-0.5 bg-gray-50 text-gray-500 text-[10px] font-medium text-center sticky left-0 z-10 w-8">
+                                <td className={`border-r p-0.5 text-[10px] font-medium text-center sticky left-0 z-20 w-8 ${rowIndex === 0 ? "bg-gray-100 text-gray-700" : "bg-gray-50 text-gray-500"}`}>
                                   {rowIndex + 1}
                                 </td>
 
@@ -863,12 +863,24 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                                   const displayValue = validatedValue !== null ? validatedValue : (cell || "");
 
                                   return (
-                                    <td key={colIndex} className={`border-r p-0 ${cellClass}`}>
-                                      <Input
-                                        value={displayValue}
-                                        onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
-                                        className={`border-0 focus-visible:ring-1 h-6 text-[10px] px-1 py-0.5 w-[70px] leading-tight bg-transparent ${cellClass}`}
-                                      />
+                                    <td
+                                      key={colIndex}
+                                      className={`border-r p-0 min-w-[140px] ${rowIndex === 0 ? "bg-gray-100 sticky top-0 z-10" : ""} ${cellClass}`}
+                                    >
+                                      {rowIndex === 0 ? (
+                                        <div
+                                          className="px-2 py-1 text-[10px] font-semibold text-gray-800 whitespace-normal break-words leading-snug"
+                                          title={displayValue}
+                                        >
+                                          {displayValue}
+                                        </div>
+                                      ) : (
+                                        <Input
+                                          value={displayValue}
+                                          onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
+                                          className={`border-0 focus-visible:ring-1 h-6 text-[10px] px-2 py-0.5 w-full min-w-[120px] leading-tight bg-transparent ${cellClass}`}
+                                        />
+                                      )}
                                     </td>
                                   );
                                 })}

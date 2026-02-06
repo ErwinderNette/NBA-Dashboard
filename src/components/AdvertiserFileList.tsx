@@ -45,6 +45,10 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const [isSavingFile, setIsSavingFile] = useState<Record<number, boolean>>({});
   // ✅ Validierungsergebnisse für Zeilenfärbung
   const [validationData, setValidationData] = useState<Record<number, any>>({});
+  // ✅ Excel-ähnliche Copy-Paste Funktionalität
+  const [selectedCells, setSelectedCells] = useState<Record<number, Set<string>>>({}); // fileId -> Set of "row-col"
+  const [copiedCells, setCopiedCells] = useState<Record<number, { data: string[][], startRow: number, startCol: number }>>({});
+  const [isSelecting, setIsSelecting] = useState<Record<number, { startRow: number, startCol: number } | null>>({});
 
   useEffect(() => {
     // ✅ Lade zuerst Validierungen aus localStorage (sofort verfügbar, auch nach Reload)
@@ -326,9 +330,22 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   };
 
   // ✅ Prüft, ob eine Spalte bearbeitbar ist (ab der zweiten "Ordertoken/OrderID" Spalte)
-  const isColumnEditable = (fileId: number, colIndex: number): boolean => {
+  const isColumnEditable = (fileId: number, colIndex: number, rowIndex?: number): boolean => {
     const headerRow = fileData[fileId]?.[0];
     if (!headerRow) return false;
+
+    // Header-Zeile (rowIndex === 0) ist nie bearbeitbar
+    if (rowIndex === 0) {
+      return false;
+    }
+
+    // Prüfe, ob die Zeile "ausgezahlt" Status hat - dann ist sie nicht bearbeitbar
+    if (rowIndex !== undefined && rowIndex > 0) {
+      const rowStatus = getRowStatus(fileId, rowIndex);
+      if (rowStatus === "ausgezahlt") {
+        return false; // Ausgezahlte Zeilen sind komplett nicht bearbeitbar
+      }
+    }
 
     // Finde alle "Ordertoken/OrderID" Spalten
     const orderTokenColumns: number[] = [];
@@ -348,6 +365,178 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     // Fallback: Wenn keine oder nur eine gefunden wurde, alles bearbeitbar lassen
     return true;
   };
+
+  // ✅ Excel-ähnliche Copy-Paste Handler
+  const handleCellMouseDown = (fileId: number, rowIndex: number, colIndex: number, e: React.MouseEvent) => {
+    if (e.shiftKey && isSelecting[fileId]) {
+      // Shift+Klick: Erweitere Selection
+      const start = isSelecting[fileId]!;
+      const newSelection = new Set<string>();
+      const minRow = Math.min(start.startRow, rowIndex);
+      const maxRow = Math.max(start.startRow, rowIndex);
+      const minCol = Math.min(start.startCol, colIndex);
+      const maxCol = Math.max(start.startCol, colIndex);
+      
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          newSelection.add(`${r}-${c}`);
+        }
+      }
+      setSelectedCells(prev => ({ ...prev, [fileId]: newSelection }));
+    } else {
+      // Neuer Selection Start
+      setIsSelecting(prev => ({ ...prev, [fileId]: { startRow: rowIndex, startCol: colIndex } }));
+      setSelectedCells(prev => ({ ...prev, [fileId]: new Set([`${rowIndex}-${colIndex}`]) }));
+    }
+  };
+
+  const handleCellMouseEnter = (fileId: number, rowIndex: number, colIndex: number, e: React.MouseEvent) => {
+    if (e.buttons === 1 && isSelecting[fileId]) {
+      // Drag Selection
+      const start = isSelecting[fileId]!;
+      const newSelection = new Set<string>();
+      const minRow = Math.min(start.startRow, rowIndex);
+      const maxRow = Math.max(start.startRow, rowIndex);
+      const minCol = Math.min(start.startCol, colIndex);
+      const maxCol = Math.max(start.startCol, colIndex);
+      
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          newSelection.add(`${r}-${c}`);
+        }
+      }
+      setSelectedCells(prev => ({ ...prev, [fileId]: newSelection }));
+    }
+  };
+
+  const handleCopy = (fileId: number, e: React.ClipboardEvent | KeyboardEvent) => {
+    const selection = selectedCells[fileId];
+    if (!selection || selection.size === 0) return;
+
+    e.preventDefault();
+    
+    // Finde die Bounds der Selection
+    const cells = Array.from(selection).map(key => {
+      const [r, c] = key.split('-').map(Number);
+      return { row: r, col: c };
+    });
+    
+    const minRow = Math.min(...cells.map(c => c.row));
+    const maxRow = Math.max(...cells.map(c => c.row));
+    const minCol = Math.min(...cells.map(c => c.col));
+    const maxCol = Math.max(...cells.map(c => c.col));
+    
+    // Erstelle 2D Array der kopierten Daten
+    const copiedData: string[][] = [];
+    for (let r = minRow; r <= maxRow; r++) {
+      const row: string[] = [];
+      for (let c = minCol; c <= maxCol; c++) {
+        const cellKey = `${r}-${c}`;
+        if (selection.has(cellKey)) {
+          const cellValue = fileData[fileId]?.[r]?.[c] || "";
+          row.push(cellValue);
+        } else {
+          row.push("");
+        }
+      }
+      copiedData.push(row);
+    }
+    
+    // Kopiere als Tab-separierten Text (Excel-Format)
+    const textData = copiedData.map(row => row.join('\t')).join('\n');
+    
+    if (e instanceof ClipboardEvent) {
+      e.clipboardData.setData('text/plain', textData);
+    } else {
+      navigator.clipboard.writeText(textData);
+    }
+    
+    // Speichere für Paste
+    setCopiedCells(prev => ({
+      ...prev,
+      [fileId]: {
+        data: copiedData,
+        startRow: minRow,
+        startCol: minCol
+      }
+    }));
+    
+    toast({
+      title: "Kopiert",
+      description: `${copiedData.length} Zeile(n) kopiert`,
+    });
+  };
+
+  const handlePaste = (fileId: number, startRow: number, startCol: number, e: React.ClipboardEvent | null, pastedData?: string[][]) => {
+    const dataToPaste = pastedData || copiedCells[fileId]?.data;
+    if (!dataToPaste || dataToPaste.length === 0) {
+      // Versuche aus Clipboard zu lesen
+      if (e) {
+        e.preventDefault();
+        const text = e.clipboardData.getData('text/plain');
+        const rows = text.split('\n').map(row => row.split('\t'));
+        if (rows.length > 0 && rows[0].length > 0) {
+          handlePasteData(fileId, startRow, startCol, rows);
+          return;
+        }
+      }
+      return;
+    }
+    
+    if (e) e.preventDefault();
+    handlePasteData(fileId, startRow, startCol, dataToPaste);
+  };
+
+  const handlePasteData = (fileId: number, startRow: number, startCol: number, data: string[][]) => {
+    const newData = [...(fileData[fileId] || [])];
+    
+    data.forEach((row, rowOffset) => {
+      const targetRow = startRow + rowOffset;
+      if (!newData[targetRow]) {
+        newData[targetRow] = [];
+      }
+      
+      row.forEach((cell, colOffset) => {
+        const targetCol = startCol + colOffset;
+        // Prüfe ob Spalte bearbeitbar ist (inkl. Zeilenstatus)
+        if (isColumnEditable(fileId, targetCol, targetRow)) {
+          while (newData[targetRow].length <= targetCol) {
+            newData[targetRow].push("");
+          }
+          newData[targetRow][targetCol] = cell;
+        }
+      });
+    });
+    
+    setFileData(prev => ({ ...prev, [fileId]: newData }));
+    
+    toast({
+      title: "Eingefügt",
+      description: `${data.length} Zeile(n) eingefügt`,
+    });
+  };
+
+  // ✅ Keyboard Handler für Copy-Paste
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (expandedId === null) return;
+      
+      // Nur wenn ein Input-Feld fokussiert ist
+      const activeElement = document.activeElement;
+      if (!activeElement || activeElement.tagName !== 'INPUT') return;
+      
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        e.preventDefault();
+        handleCopy(expandedId, e);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        // Paste wird über onPaste Handler behandelt, aber wir können hier auch unterstützen
+        // Der onPaste Handler auf dem Input wird automatisch aufgerufen
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [expandedId, selectedCells, fileData, copiedCells]);
 
   const handleDownload = async (id: number, filename: string) => {
     try {
@@ -573,21 +762,74 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                                   </td>
 
                                   {paddedRow.map((cell, colIndex) => {
-                                    const editable = isColumnEditable(file.id, colIndex);
+                                    const editable = isColumnEditable(file.id, colIndex, rowIndex);
+                                    const cellKey = `${rowIndex}-${colIndex}`;
+                                    const isSelected = selectedCells[file.id]?.has(cellKey) || false;
                                     return (
-                                      <td key={colIndex} className="border-r p-1 border-gray-200">
+                                      <td 
+                                        key={colIndex} 
+                                        className="border-r p-1 border-gray-200"
+                                        onMouseDown={(e) => handleCellMouseDown(file.id, rowIndex, colIndex, e)}
+                                        onMouseEnter={(e) => handleCellMouseEnter(file.id, rowIndex, colIndex, e)}
+                                      >
                                         <Input
                                           value={cell || ""}
                                           onChange={(e) => handleCellChange(file.id, rowIndex, colIndex, e.target.value)}
                                           readOnly={!editable}
+                                          onCopy={(e) => {
+                                            // Wenn keine Selection vorhanden ist, selektiere diese Zelle
+                                            if (!selectedCells[file.id] || selectedCells[file.id].size === 0 || !isSelected) {
+                                              setSelectedCells(prev => ({ 
+                                                ...prev, 
+                                                [file.id]: new Set([cellKey]) 
+                                              }));
+                                            }
+                                            // Kopiere die Selection
+                                            setTimeout(() => handleCopy(file.id, e), 0);
+                                          }}
+                                          onPaste={(e) => {
+                                            if (editable) {
+                                              handlePaste(file.id, rowIndex, colIndex, e);
+                                            }
+                                          }}
+                                          onFocus={() => {
+                                            // Bei Focus diese Zelle selektieren
+                                            setSelectedCells(prev => ({ 
+                                              ...prev, 
+                                              [file.id]: new Set([cellKey]) 
+                                            }));
+                                            setIsSelecting(prev => ({ 
+                                              ...prev, 
+                                              [file.id]: { startRow: rowIndex, startCol: colIndex } 
+                                            }));
+                                          }}
+                                          onClick={(e) => {
+                                            // Bei Klick diese Zelle selektieren (für Copy)
+                                            if (e.shiftKey) {
+                                              handleCellMouseDown(file.id, rowIndex, colIndex, e as any);
+                                            } else {
+                                              setSelectedCells(prev => ({ 
+                                                ...prev, 
+                                                [file.id]: new Set([cellKey]) 
+                                              }));
+                                              setIsSelecting(prev => ({ 
+                                                ...prev, 
+                                                [file.id]: { startRow: rowIndex, startCol: colIndex } 
+                                              }));
+                                            }
+                                          }}
                                           className={`border border-gray-200 h-10 text-sm px-2 py-1 min-w-[140px] leading-normal ${
+                                            isSelected 
+                                              ? 'ring-2 ring-pink-500 ring-offset-1'
+                                              : ''
+                                          } ${
                                             isHeaderRow 
                                               ? editable
                                                 ? 'bg-blue-50 font-semibold hover:bg-blue-100'
-                                                : 'bg-blue-100 font-semibold text-gray-600 cursor-not-allowed'
+                                                : 'bg-blue-100 font-semibold text-gray-600 cursor-text'
                                               : editable
                                                 ? 'bg-white hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-pink-500'
-                                                : 'bg-gray-100 text-gray-600 cursor-not-allowed'
+                                                : 'bg-gray-100 text-gray-600 cursor-text'
                                           }`}
                                           placeholder=""
                                         />

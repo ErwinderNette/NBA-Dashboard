@@ -96,4 +96,33 @@ export const uploadService = {
         throw err;
       }
     },
+
+    // Gespeicherte Validierungsergebnisse laden
+    getValidation: async (uploadId: number): Promise<any | null> => {
+      try {
+        const response = await api.get(`/uploads/${uploadId}/validation`);
+        return response.data;
+      } catch (err: any) {
+        // 404 ist OK - bedeutet einfach, dass noch keine Validierung vorhanden ist
+        if (err?.response?.status === 404) {
+          return null;
+        }
+        // Nur andere Fehler loggen, nicht 404
+        if (err?.response?.status !== 404) {
+          console.error("❌ getValidation error", err);
+        }
+        throw err;
+      }
+    },
+
+    // Alle Validierungsergebnisse auf einmal laden
+    getAllValidations: async (): Promise<Record<number, any>> => {
+      try {
+        const response = await api.get('/uploads/validations');
+        return response.data;
+      } catch (err: any) {
+        console.error("❌ getAllValidations error", err);
+        return {};
+      }
+    },
 }; 

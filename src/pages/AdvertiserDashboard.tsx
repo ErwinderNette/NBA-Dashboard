@@ -14,8 +14,14 @@ const AdvertiserDashboard = () => {
   useEffect(() => {
     const fetchUploads = async () => {
       const uploads = await uploadService.getUploads();
-      setOpenFiles(uploads.filter(u => u.status !== 'completed'));
-      setCompletedFiles(uploads.filter(u => u.status === 'completed'));
+      // Sortiere nach upload_date (neueste zuerst)
+      const sortedUploads = [...uploads].sort((a, b) => {
+        const dateA = a.upload_date ? new Date(a.upload_date).getTime() : 0;
+        const dateB = b.upload_date ? new Date(b.upload_date).getTime() : 0;
+        return dateB - dateA; // Absteigend (neueste zuerst)
+      });
+      setOpenFiles(sortedUploads.filter(u => u.status !== 'completed'));
+      setCompletedFiles(sortedUploads.filter(u => u.status === 'completed'));
     };
     fetchUploads();
     // Optional: Event-Listener für Upload-Updates

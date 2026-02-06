@@ -27,8 +27,8 @@ func InitDB() *gorm.DB {
 	}
 
 	// Migration
-	if err := db.AutoMigrate(&models.User{}, &models.Upload{}); err != nil {
-		log.Fatalf("failed to migrate user/upload table: %v", err)
+	if err := db.AutoMigrate(&models.User{}, &models.Upload{}, &models.ValidationResult{}); err != nil {
+		log.Fatalf("failed to migrate tables: %v", err)
 	}
 
 	return db

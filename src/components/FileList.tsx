@@ -12,7 +12,13 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
-import React, { useState } from "react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import React, { useState, useEffect } from "react";
 
 interface FileItem {
   name: string;
@@ -42,6 +48,167 @@ const FileList = ({ files, onDelete, onComplete }: FileListProps) => {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<FileItem | null>(null);
+  const [validationData, setValidationData] = useState<Record<number, any>>({});
+  const [loadingValidations, setLoadingValidations] = useState<Set<number>>(new Set());
+
+  // Lade Validierungsergebnisse für alle Dateien
+  useEffect(() => {
+    const loadValidations = async () => {
+      console.log("🔍 [FileList] Lade Validierungen für Dateien:", files.map(f => ({ id: f.id, name: f.name, status: f.status })));
+      const newValidationData: Record<number, any> = { ...validationData };
+      const loadingSet = new Set<number>();
+
+      for (const file of files) {
+        if (!file.id) {
+          console.log("⚠️ [FileList] Datei ohne ID gefunden:", file.name);
+          continue;
+        }
+        // Nur laden wenn Status "assigned", "feedback" oder "feedback_submitted" ist
+        if (file.status === 'assigned' || file.status === 'feedback' || file.status === 'feedback_submitted') {
+          // Überspringe, wenn bereits geladen
+          if (validationData[file.id]) {
+            console.log(`✅ [FileList] Validierung bereits geladen für UploadID=${file.id}`);
+            continue;
+          }
+          
+          console.log(`🔄 [FileList] Lade Validierung für UploadID=${file.id}, Status=${file.status}`);
+          loadingSet.add(file.id);
+          try {
+            const validation = await uploadService.getValidation(file.id);
+            if (validation) {
+              console.log(`✅ [FileList] Validierung gefunden für UploadID=${file.id}:`, validation);
+              newValidationData[file.id] = validation;
+            } else {
+              console.log(`ℹ️ [FileList] Keine Validierung für UploadID=${file.id} (null zurückgegeben)`);
+            }
+          } catch (err: any) {
+            if (err?.response?.status === 404) {
+              console.log(`ℹ️ [FileList] Keine Validierung für UploadID=${file.id} (404 - noch nicht validiert)`);
+            } else {
+              console.error(`❌ [FileList] Fehler beim Laden der Validierung für UploadID=${file.id}:`, err);
+            }
+          } finally {
+            loadingSet.delete(file.id);
+          }
+        } else {
+          console.log(`⏭️ [FileList] Überspringe UploadID=${file.id}, Status=${file.status} (nicht im richtigen Status)`);
+        }
+      }
+
+      console.log("📊 [FileList] Validierungsdaten nach Laden:", Object.keys(newValidationData).map(k => ({ id: k, hasData: !!newValidationData[Number(k)] })));
+      
+      // Nur aktualisieren, wenn sich etwas geändert hat
+      const hasChanges = Object.keys(newValidationData).length !== Object.keys(validationData).length ||
+        Object.keys(newValidationData).some(key => newValidationData[Number(key)] !== validationData[Number(key)]);
+      
+      if (hasChanges) {
+        console.log("💾 [FileList] Aktualisiere Validierungsdaten");
+        setValidationData(newValidationData);
+      } else {
+        console.log("⏸️ [FileList] Keine Änderungen, überspringe Update");
+      }
+      setLoadingValidations(loadingSet);
+    };
+
+    loadValidations();
+
+    // Höre auf Upload-Updates, um Validierungen neu zu laden
+    const handleUploadsUpdate = () => {
+      console.log("🔄 [FileList] Upload-Update Event empfangen, lade Validierungen neu");
+      loadValidations();
+    };
+    window.addEventListener("uploads-updated", handleUploadsUpdate);
+
+    return () => {
+      window.removeEventListener("uploads-updated", handleUploadsUpdate);
+    };
+  }, [files]);
+
+  // Berechne Status-Zusammenfassung für eine Datei
+  const getStatusSummary = (fileId?: number): { bestätigt: number; offen: number; storniert: number; ausgezahlt: number } => {
+    if (!fileId) return { bestätigt: 0, offen: 0, storniert: 0, ausgezahlt: 0 };
+    
+    const validation = validationData[fileId];
+    if (!validation?.rows) return { bestätigt: 0, offen: 0, storniert: 0, ausgezahlt: 0 };
+
+    const summary = { bestätigt: 0, offen: 0, storniert: 0, ausgezahlt: 0 };
+
+    for (const row of validation.rows) {
+      if (!row.cells) continue;
+      const statusCell = row.cells["Status in der uppr Performance Platform"];
+      if (statusCell && typeof statusCell === "object" && "value" in statusCell) {
+        const statusValue = statusCell.value;
+        if (statusValue === "bestätigt" || statusValue === "1") summary.bestätigt++;
+        else if (statusValue === "offen" || statusValue === "0") summary.offen++;
+        else if (statusValue === "storniert" || statusValue === "2") summary.storniert++;
+        else if (statusValue === "ausgezahlt" || statusValue === "3") summary.ausgezahlt++;
+      }
+    }
+
+    return summary;
+  };
+
+  // Download Validierungsergebnisse als CSV
+  const handleDownloadComparison = async (file: FileItem) => {
+    if (!file.id) return;
+
+    const validation = validationData[file.id];
+    if (!validation?.rows) return;
+
+    try {
+      // Lade die Originaldatei, um die Header zu bekommen
+      const fileContent = await uploadService.getFileContent(file.id);
+      const headers = fileContent.data[0] || [];
+
+      // Erstelle CSV-Inhalt
+      const csvRows: string[] = [];
+
+      // Header-Zeile
+      const headerRow = [...headers, "Status in der uppr Performance Platform"];
+      csvRows.push(headerRow.map(h => `"${String(h).replace(/"/g, '""')}"`).join(","));
+
+      // Daten-Zeilen
+      for (let i = 1; i < fileContent.data.length; i++) {
+        const originalRow = fileContent.data[i] || [];
+        const validationRow = validation.rows[i - 1];
+        
+        const csvRow: string[] = [];
+        
+        // Original-Spalten
+        for (let j = 0; j < headers.length; j++) {
+          const value = originalRow[j] || "";
+          csvRow.push(`"${String(value).replace(/"/g, '""')}"`);
+        }
+
+        // Status-Spalte aus Validierung
+        if (validationRow?.cells) {
+          const statusCell = validationRow.cells["Status in der uppr Performance Platform"];
+          const statusValue = statusCell && typeof statusCell === "object" && "value" in statusCell
+            ? statusCell.value
+            : "";
+          csvRow.push(`"${String(statusValue).replace(/"/g, '""')}"`);
+        } else {
+          csvRow.push(`""`);
+        }
+
+        csvRows.push(csvRow.join(","));
+      }
+
+      // Erstelle Blob und Download
+      const csvContent = csvRows.join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `${file.name.replace(/\.[^/.]+$/, "")}_Vergleich_Netzwerk.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Fehler beim Download der Vergleichsergebnisse:", err);
+    }
+  };
 
   const handleDeleteClick = (file: FileItem) => {
     setFileToDelete(file);
@@ -145,7 +312,37 @@ const FileList = ({ files, onDelete, onComplete }: FileListProps) => {
                   >
                     Abschließen
                   </Button>
-                ) : null}
+                ) : file.id && validationData[file.id] ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-yellow-600 border-yellow-600 hover:bg-yellow-50"
+                          onClick={() => handleDownloadComparison(file)}
+                        >
+                          Vergleich Netzwerk
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <div className="space-y-1">
+                          <div>{getStatusSummary(file.id).bestätigt} bestätigt</div>
+                          <div>{getStatusSummary(file.id).offen} offen</div>
+                          <div>{getStatusSummary(file.id).storniert} storniert</div>
+                          <div>{getStatusSummary(file.id).ausgezahlt} ausgezahlt</div>
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  // Debug-Info für fehlenden Button
+                  file.id && (file.status === 'assigned' || file.status === 'feedback' || file.status === 'feedback_submitted') ? (
+                    <span className="text-xs text-gray-400" title={`Debug: file.id=${file.id}, validationData[${file.id}]=${validationData[file.id] ? 'exists' : 'missing'}`}>
+                      ⏳
+                    </span>
+                  ) : null
+                )}
               </div>
             </div>
           ))}

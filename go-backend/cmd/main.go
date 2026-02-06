@@ -89,6 +89,10 @@ func main() {
 
 	// ✅ Validation für Admin-Preview
 	app.Get("/api/uploads/:id/validate", handlers.AuthRequired(), handlers.HandleValidateUpload(db))
+	// ✅ Gespeicherte Validierungsergebnisse laden
+	app.Get("/api/uploads/:id/validation", handlers.AuthRequired(), handlers.HandleGetValidation(db))
+	// ✅ Alle Validierungsergebnisse auf einmal laden
+	app.Get("/api/uploads/validations", handlers.AuthRequired(), handlers.HandleGetAllValidations(db))
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
