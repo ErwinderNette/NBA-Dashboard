@@ -13,6 +13,14 @@ type ValidationService struct{}
 
 func NewValidationService() *ValidationService { return &ValidationService{} }
 
+type ValidationContext struct {
+	CampaignID        string
+	ProjectID         string
+	PublisherID       string
+	CommissionGroupID string
+	TriggerID         string
+}
+
 var Pflichtfelder = []string{
 	"Publisher ID",
 	"Vollständiger Name des Endkunden",
@@ -24,7 +32,7 @@ var Pflichtfelder = []string{
 	"Ordertoken/OrderID",
 }
 
-func (v *ValidationService) Validate(rows []map[string]string, orders []ExternalOrder) []models.ValidatedRow {
+func (v *ValidationService) Validate(rows []map[string]string, orders []ExternalOrder, ctx ValidationContext) []models.ValidatedRow {
 	ordersByToken := map[string]ExternalOrder{} // Jetzt mit vollständigem ExternalOrder
 	subidSet := map[string]struct{}{}
 
@@ -205,6 +213,7 @@ func (v *ValidationService) Validate(rows []map[string]string, orders []External
 
 		// Status aus API in Spalte "Status in der uppr Performance Platform" eintragen
 		statusColName := "Status in der uppr Performance Platform"
+		commissionColName := "Commission aus Netzwerk"
 
 		// Finde das OrderToken für diese Zeile
 		// Zuerst aus der bereits validierten Zelle (falls vorhanden)
@@ -274,6 +283,14 @@ func (v *ValidationService) Validate(rows []map[string]string, orders []External
 						log.Printf("❌ Row %d - Order.Status ist negativ: %d", i, order.Status)
 					}
 				}
+
+				// Commission API-first bereitstellen (für CSV-Export-Fallbacklogik im Admin-Flow)
+				if strings.TrimSpace(order.Commission) != "" {
+					cells[commissionColName] = models.ValidatedCell{
+						Value:  normalizeCommission(order.Commission),
+						Status: models.CellOK,
+					}
+				}
 			} else {
 				// Debug
 				if i < 5 {
@@ -284,6 +301,29 @@ func (v *ValidationService) Validate(rows []map[string]string, orders []External
 			// Debug
 			if i < 5 {
 				log.Printf("❌ Row %d - Kein OrderToken gefunden für Status", i)
+			}
+		}
+
+		// Fallback: Wenn keine Orders von der API (orders leer), Status aus CSV-Text ableiten
+		// (z. B. "Vollständiger Name" enthält "Offen", "Storniert", "Ausgezahlt", "Bestätigt")
+		if _, hasStatus := cells[statusColName]; !hasStatus && len(orders) == 0 {
+			inferred := inferStatusFromRow(r)
+			if inferred != "" {
+				cells[statusColName] = models.ValidatedCell{
+					Value:  inferred,
+					Status: models.CellOK,
+				}
+			}
+		}
+
+		// Commission-Fallback für Zeilen ohne direkten Order-Match:
+		// Nutzt API-first aus passenden Orders nach Partner-Parametern und Timestamp pro Zeile.
+		inferredCommission := inferCommissionForRow(r, orders, ctx)
+		if _, hasCommission := cells[commissionColName]; !hasCommission && inferredCommission != "" {
+			cells[commissionColName] = models.ValidatedCell{
+				Value:  inferredCommission,
+				Status: models.CellOK,
+				Note:   "inferred from network (row-based)",
 			}
 		}
 
@@ -311,6 +351,145 @@ func (v *ValidationService) Validate(rows []map[string]string, orders []External
 	return out
 }
 
+func normalizeCommission(raw string) string {
+	value := strings.TrimSpace(raw)
+	value = strings.ReplaceAll(value, ",", ".")
+	return value
+}
+
+func inferCommissionForRow(row map[string]string, orders []ExternalOrder, ctx ValidationContext) string {
+	if len(orders) == 0 {
+		return ""
+	}
+
+	matchesContext := func(o ExternalOrder, strict bool) bool {
+		if strict {
+			if ctx.PublisherID != "" && strings.TrimSpace(o.PublisherID) != strings.TrimSpace(ctx.PublisherID) {
+				return false
+			}
+			if ctx.ProjectID != "" && strings.TrimSpace(o.ProjectID) != strings.TrimSpace(ctx.ProjectID) {
+				return false
+			}
+			if ctx.CommissionGroupID != "" && strings.TrimSpace(o.CommissionGroupID) != strings.TrimSpace(ctx.CommissionGroupID) {
+				return false
+			}
+			if ctx.TriggerID != "" && strings.TrimSpace(o.TriggerID) != strings.TrimSpace(ctx.TriggerID) {
+				return false
+			}
+			if ctx.CampaignID != "" && strings.TrimSpace(o.CampaignID) != strings.TrimSpace(ctx.CampaignID) {
+				return false
+			}
+			return true
+		}
+
+		// Relaxed match: publisher/project/campaign priorisieren (trigger/commissionGroup optional)
+		if ctx.PublisherID != "" && strings.TrimSpace(o.PublisherID) != strings.TrimSpace(ctx.PublisherID) {
+			return false
+		}
+		if ctx.ProjectID != "" && strings.TrimSpace(o.ProjectID) != strings.TrimSpace(ctx.ProjectID) {
+			return false
+		}
+		if ctx.CampaignID != "" && strings.TrimSpace(o.CampaignID) != strings.TrimSpace(ctx.CampaignID) {
+			return false
+		}
+		return true
+	}
+
+	collect := func(strict bool) []ExternalOrder {
+		candidates := []ExternalOrder{}
+		for _, o := range orders {
+			commission := normalizeCommission(o.Commission)
+			if commission == "" {
+				continue
+			}
+			if !matchesContext(o, strict) {
+				continue
+			}
+			candidates = append(candidates, o)
+		}
+		return candidates
+	}
+
+	candidates := collect(true)
+	if len(candidates) == 0 {
+		candidates = collect(false)
+	}
+	if len(candidates) == 0 {
+		// Letzter Fallback: alle Orders mit Commission
+		for _, o := range orders {
+			if normalizeCommission(o.Commission) != "" {
+				candidates = append(candidates, o)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// 1) Exaktes SubID-Match hat Vorrang
+	rowSubID := strings.TrimSpace(row["SubID"])
+	if rowSubID != "" {
+		for _, o := range candidates {
+			if strings.TrimSpace(o.SubID) == rowSubID {
+				return normalizeCommission(o.Commission)
+			}
+		}
+	}
+
+	// 2) Timestamp-nahes Matching
+	rowTs, rowTsErr := parseFlexibleTime(strings.TrimSpace(row["Timestamp"]))
+	if rowTsErr == nil {
+		var best *ExternalOrder
+		var bestDiff time.Duration
+		for i := range candidates {
+			o := candidates[i]
+			orderTs, err := parseFlexibleTime(strings.TrimSpace(o.Timestamp))
+			if err != nil {
+				continue
+			}
+			diff := rowTs.Sub(orderTs)
+			if diff < 0 {
+				diff = -diff
+			}
+			// Nur in sinnvollem Zeitfenster berücksichtigen (+/- 14 Tage)
+			if diff > (14 * 24 * time.Hour) {
+				continue
+			}
+			if best == nil || diff < bestDiff {
+				best = &o
+				bestDiff = diff
+			}
+		}
+		if best != nil {
+			return normalizeCommission(best.Commission)
+		}
+	}
+
+	// 3) Fallback: häufigste Commission innerhalb der Kandidaten
+	type bucket struct {
+		count int
+	}
+	counts := map[string]bucket{}
+	for _, o := range candidates {
+		commission := normalizeCommission(o.Commission)
+		if commission == "" {
+			continue
+		}
+		b := counts[commission]
+		b.count++
+		counts[commission] = b
+	}
+	best := ""
+	bestCount := -1
+	for c, b := range counts {
+		if b.count > bestCount {
+			bestCount = b.count
+			best = c
+		}
+	}
+	return best
+}
+
 // helpers
 func looksLikeDate(s string) bool {
 	_, err := parseFlexibleTime(s)
@@ -331,9 +510,14 @@ func sameDay(a, b string) bool {
 func parseFlexibleTime(s string) (time.Time, error) {
 	layouts := []string{
 		time.RFC3339,
+		"2006-01-02 15:04:05-07",
+		"2006-01-02 15:04:05.999999-07",
 		"2006-01-02 15:04:05",
 		"02.01.2006",
 		"02.01.2006 15:04",
+		"02/01/06",
+		"02/01/06 15:04",
+		"02/01/2006 15:04",
 		"01/02/2006",
 	}
 	s = strings.TrimSpace(s)
@@ -359,4 +543,28 @@ func mapStatusToText(status int) string {
 	default:
 		return ""
 	}
+}
+
+// inferStatusFromRow leitet aus CSV-Zelltext einen Status ab (Fallback wenn API 0 Orders liefert).
+// Sucht in "Vollständiger Name des Endkunden" und allen Zellen nach Stichwörtern.
+func inferStatusFromRow(r map[string]string) string {
+	nameCol := "Vollständiger Name des Endkunden"
+	combined := strings.TrimSpace(r[nameCol])
+	for _, v := range r {
+		combined += " " + strings.TrimSpace(v)
+	}
+	lower := strings.ToLower(combined)
+	if strings.Contains(lower, "ausgezahlt") {
+		return "ausgezahlt"
+	}
+	if strings.Contains(lower, "storniert") {
+		return "storniert"
+	}
+	if strings.Contains(lower, "bestätigt") {
+		return "bestätigt"
+	}
+	if strings.Contains(lower, "offen") {
+		return "offen"
+	}
+	return ""
 }

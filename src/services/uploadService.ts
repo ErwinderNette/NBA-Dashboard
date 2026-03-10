@@ -77,10 +77,26 @@ export const uploadService = {
   },
 
   
-    // Validation für Admin-Preview (mit Debug)
-    validateUpload: async (uploadId: number): Promise<any> => {
+    // Validation für Admin-Preview (mit Debug). campaignId + Partner-Parameter für API-first Commission.
+    validateUpload: async (
+      uploadId: number,
+      options?: {
+        campaignId?: string;
+        projectId?: string;
+        publisherId?: string;
+        commissionGroupId?: string;
+        triggerId?: string;
+      }
+    ): Promise<any> => {
       try {
+        const params: Record<string, string> = {};
+        if (options?.campaignId) params.campaignId = options.campaignId;
+        if (options?.projectId) params.projectId = options.projectId;
+        if (options?.publisherId) params.publisherId = options.publisherId;
+        if (options?.commissionGroupId) params.commissionGroupId = options.commissionGroupId;
+        if (options?.triggerId) params.triggerId = options.triggerId;
         const response = await api.get(`/uploads/${uploadId}/validate`, {
+          params,
           timeout: 120000, // 120s, weil API-Call groß sein kann
         });
         console.log("✅ validateUpload response", response.data);
@@ -101,7 +117,10 @@ export const uploadService = {
     getValidation: async (uploadId: number): Promise<any | null> => {
       try {
         const response = await api.get(`/uploads/${uploadId}/validation`);
-        return response.data;
+      if (response?.data?.hasValidation === false) {
+        return null;
+      }
+      return response.data;
       } catch (err: any) {
         // 404 ist OK - bedeutet einfach, dass noch keine Validierung vorhanden ist
         if (err?.response?.status === 404) {

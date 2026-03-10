@@ -18,6 +18,12 @@ type ExternalOrder struct {
 	SubID      string `json:"subid"`
 	Timestamp  string `json:"timestamp"`
 	Status     int    `json:"status"` // Status: 0=offen, 1=bestätigt, 2=storniert, 3=ausgezahlt
+	Commission string `json:"commission"`
+	ProjectID         string `json:"project_id"`
+	PublisherID       string `json:"publisher_id"`
+	CommissionGroupID string `json:"commission_group_id"`
+	TriggerID         string `json:"trigger_id"`
+	CampaignID        string `json:"campaign_id"`
 }
 
 type ordersCacheEntry struct {
@@ -37,8 +43,8 @@ type OrdersService struct {
 func NewOrdersService(apiURL string) *OrdersService {
 	return &OrdersService{
 		apiURL: apiURL,
-		// ✅ mehr Zeit geben – API kann groß sein
-		client: &http.Client{Timeout: 60 * time.Second},
+		// Mehr Zeit für große Kampagnenantworten (z. B. eprimo)
+		client: &http.Client{Timeout: 120 * time.Second},
 		ttl:    5 * time.Minute,
 	}
 }
@@ -78,6 +84,11 @@ func (s *OrdersService) GetOrders(ctx context.Context) ([]ExternalOrder, error) 
 
 		resp, err := s.client.Do(req)
 		if err != nil {
+			// Timeout/Cancel direkt zurückgeben statt weiteren 60s-Loop.
+			if strings.Contains(err.Error(), "context deadline exceeded") ||
+				strings.Contains(err.Error(), "Client.Timeout") {
+				return nil, err
+			}
 			lastErr = err
 			continue
 		}
@@ -86,6 +97,10 @@ func (s *OrdersService) GetOrders(ctx context.Context) ([]ExternalOrder, error) 
 		resp.Body.Close()
 
 		if err != nil {
+			if strings.Contains(err.Error(), "context deadline exceeded") ||
+				strings.Contains(err.Error(), "context cancellation") {
+				return nil, fmt.Errorf("read body error: %w", err)
+			}
 			lastErr = fmt.Errorf("read body error: %w", err)
 			continue
 		}
@@ -189,6 +204,12 @@ func mapToOrderLoose(m map[string]any) ExternalOrder {
 	subID := get("subid", "subId", "sub_id")
 	timestamp := get("timestamp", "time", "created_at", "createdAt")
 	status := getInt("status")
+	commission := get("commission", "source_commission", "provision")
+	projectID := get("project_id", "projectId")
+	publisherID := get("publisher_id", "publisherId")
+	commissionGroupID := get("commission_group_id", "commissionGroupId")
+	triggerID := get("trigger_id", "triggerId")
+	campaignID := get("campaign_id", "campaignId")
 
 	// Debug: Log wenn Status gefunden wird
 	if status >= 0 && orderToken != "" {
@@ -200,6 +221,12 @@ func mapToOrderLoose(m map[string]any) ExternalOrder {
 		SubID:      subID,
 		Timestamp:  timestamp,
 		Status:     status,
+		Commission: commission,
+		ProjectID:         projectID,
+		PublisherID:       publisherID,
+		CommissionGroupID: commissionGroupID,
+		TriggerID:         triggerID,
+		CampaignID:        campaignID,
 	}
 }
 

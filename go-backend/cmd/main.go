@@ -65,10 +65,16 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
+	
+	// CORS-Konfiguration: Erlaube alle Origins für Entwicklung
+	// In Produktion sollte dies auf spezifische Domains beschränkt werden
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "http://localhost:4173,http://localhost:8080",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
-		AllowMethods: "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		AllowOrigins:     "*", // Für Entwicklung: erlaube alle Origins
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		AllowCredentials: false, // Bei "*" muss AllowCredentials false sein
+		ExposeHeaders:    "",
+		MaxAge:           0, // Preflight-Cache deaktiviert für Entwicklung
 	}))
 
 	// Routes
@@ -259,10 +265,12 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 	var result []fiber.Map
 	for _, a := range advertisers {
 		result = append(result, fiber.Map{
-			"id":      a.ID,
-			"name":    a.Name,
-			"email":   a.Email,
-			"company": a.Company,
+			"id":                  a.ID,
+			"name":                a.Name,
+			"email":               a.Email,
+			"company":             a.Company,
+			"commission_group_id": a.CommissionGroupID,
+			"trigger_id":          a.TriggerID,
 		})
 	}
 	return c.JSON(result)
@@ -276,11 +284,15 @@ func handleGetUsers(c *fiber.Ctx) error {
 	var result []fiber.Map
 	for _, u := range users {
 		result = append(result, fiber.Map{
-			"id":      u.ID,
-			"name":    u.Name,
-			"email":   u.Email,
-			"company": u.Company,
-			"role":    u.Role,
+			"id":                  u.ID,
+			"name":                u.Name,
+			"email":               u.Email,
+			"company":             u.Company,
+			"role":                u.Role,
+			"project_id":          u.ProjectID,
+			"publisher_id":        u.PublisherID,
+			"commission_group_id": u.CommissionGroupID,
+			"trigger_id":          u.TriggerID,
 		})
 	}
 	return c.JSON(result)

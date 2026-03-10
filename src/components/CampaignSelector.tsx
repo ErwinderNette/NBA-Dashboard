@@ -13,9 +13,9 @@ const CampaignSelector = () => {
 
   // Beispiel-Kampagnen (in einer echten App würden diese von der API kommen)
   const campaigns = [
-    { id: '122', name: 'NEW Energie Kampagne' },
-    { id: '123', name: 'eprimo Kampagne' },
-    { id: '124', name: 'Ankerkraut Kampagne' },
+    { id: '260', name: 'NEW Energie Kampagne' },
+    { id: '122', name: 'eprimo Kampagne' },
+    { id: '207', name: 'Ankerkraut Kampagne' },
   ];
 
   const { data: campaignOrders, isLoading, refetch } = useQuery({

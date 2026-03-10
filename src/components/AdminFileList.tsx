@@ -47,6 +47,10 @@ interface UserWithCompany {
   email: string;
   company: string;
   role: string;
+  project_id?: number;
+  publisher_id?: number;
+  commission_group_id?: number;
+  trigger_id?: number;
 }
 
 interface AdminFileListProps {
@@ -74,6 +78,61 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   const [isValidating, setIsValidating] = useState<Record<number, boolean>>({});
   const [validationError, setValidationError] = useState<Record<number, string | null>>({});
   const [validationProgress, setValidationProgress] = useState<Record<number, number>>({});
+  // Kampagne für Orders-API beim „Aktualisieren“ (wie campaignService.getOrders)
+  const [validationCampaignId, setValidationCampaignId] = useState<string>("122");
+  const validationCampaigns = [
+    { id: "260", name: "NEW Energie Kampagne" },
+    { id: "122", name: "eprimo Kampagne" },
+    { id: "207", name: "Ankerkraut Kampagne" },
+  ];
+  const campaignConfigByKey: Record<string, { id: string; name: string; commissionGroupId?: string; triggerId?: string }> = {
+    "newenergie": { id: "260", name: "NEW Energie", commissionGroupId: "912", triggerId: "6" },
+    "eprimo": { id: "122", name: "eprimo", commissionGroupId: "394", triggerId: "1" },
+    "ankerkraut": { id: "207", name: "Ankerkraut" },
+  };
+
+  const normalizePartnerKey = (value?: string) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+
+  const resolveCampaignFromText = (value?: string) => {
+    const normalized = normalizePartnerKey(value);
+    if (!normalized) return null;
+    for (const [key, cfg] of Object.entries(campaignConfigByKey)) {
+      if (normalized.includes(key)) return cfg;
+    }
+    return null;
+  };
+
+  const resolvePartnerContext = (file: UploadItem) => {
+    const advertiserUser =
+      allUsers.find((u) => u.email === file.assigned_advertiser_email && u.role === "advertiser") ||
+      allUsers.find((u) => u.company?.toLowerCase() === "new energie" && file.filename.toLowerCase().includes("new")) ||
+      allUsers.find((u) => u.company?.toLowerCase() === "eprimo" && file.filename.toLowerCase().includes("eprimo"));
+
+    const publisherUser =
+      allUsers.find((u) => u.email === file.uploaded_by && u.role === "publisher") ||
+      allUsers.find((u) => u.email === file.last_modified_by && u.role === "publisher");
+
+    const campaignFromAdvertiser =
+      resolveCampaignFromText(advertiserUser?.company) ||
+      resolveCampaignFromText(advertiserUser?.name) ||
+      resolveCampaignFromText(file.assigned_advertiser_email) ||
+      resolveCampaignFromText(file.filename);
+
+    const campaignFromDropdown = validationCampaigns.find((c) => c.id === validationCampaignId) || null;
+    const effectiveCampaign =
+      campaignFromAdvertiser ||
+      (campaignFromDropdown ? { id: campaignFromDropdown.id, name: campaignFromDropdown.name.replace(" Kampagne", "") } : null);
+
+    return {
+      advertiserUser,
+      publisherUser,
+      effectiveCampaign,
+      campaignFromDropdown,
+    };
+  };
 
   const validationIntervalsRef = useRef<Record<number, ReturnType<typeof setInterval> | null>>({});
 
@@ -339,15 +398,45 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   };
 
   // ✅ Manuelle Aktualisierung der Validierung
-  const handleRefreshValidation = async (id: number) => {
+  const handleRefreshValidation = async (id: number, file?: UploadItem) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:handleRefreshValidation',message:'Aktualisieren clicked',data:{uploadId:id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     setIsValidating(prev => ({ ...prev, [id]: true }));
     setValidationError(prev => ({ ...prev, [id]: null }));
 
     validationIntervalsRef.current[id] = startFakeProgress(id);
 
     try {
-      // ✅ Führe neue Validierung durch (wird automatisch im Backend gespeichert)
-      const v = await uploadService.validateUpload(id);
+      const partnerCtx = file ? resolvePartnerContext(file) : null;
+      const campaignIdForValidation = partnerCtx?.effectiveCampaign?.id || validationCampaignId;
+      if (campaignIdForValidation !== validationCampaignId) {
+        setValidationCampaignId(campaignIdForValidation);
+      }
+      const projectIdForValidation =
+        partnerCtx?.publisherUser?.project_id ? String(partnerCtx.publisherUser.project_id) : undefined;
+      const publisherIdForValidation =
+        partnerCtx?.publisherUser?.publisher_id ? String(partnerCtx.publisherUser.publisher_id) : undefined;
+      const commissionGroupIdForValidation =
+        partnerCtx?.advertiserUser?.commission_group_id
+          ? String(partnerCtx.advertiserUser.commission_group_id)
+          : undefined;
+      const triggerIdForValidation =
+        partnerCtx?.advertiserUser?.trigger_id ? String(partnerCtx.advertiserUser.trigger_id) : undefined;
+      // ✅ Führe neue Validierung durch (Backend ruft Orders-API mit campaignId auf)
+      const v = await uploadService.validateUpload(id, {
+        campaignId: campaignIdForValidation,
+        projectId: projectIdForValidation,
+        publisherId: publisherIdForValidation,
+        commissionGroupId: commissionGroupIdForValidation,
+        triggerId: triggerIdForValidation,
+      });
+      // #region agent log
+      const rowCount = v?.rows?.length ?? 0;
+      const firstRowCells = v?.rows?.[0]?.cells ? Object.keys(v.rows[0].cells) : [];
+      const statusCell = v?.rows?.[0]?.cells?.["Status in der uppr Performance Platform"];
+      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:after validateUpload',message:'Validation response',data:{uploadId:id,rowsLength:rowCount,firstRowCellKeys:firstRowCells,statusCellValue:statusCell?.value,statusCellExists:!!statusCell},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B,C,E'})}).catch(()=>{});
+      // #endregion
       stopFakeProgress(id, 100);
       
       // ✅ Speichere die neuen Validierungsergebnisse im State
@@ -361,6 +450,9 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
         description: "Die Validierung wurde erfolgreich aktualisiert und gespeichert.",
       });
     } catch (err: any) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:validateUpload error',message:'Validate failed',data:{uploadId:id,errMessage:err?.message,status:err?.response?.status},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       stopFakeProgress(id, 0);
       const detail =
         err?.response?.data?.error ||
@@ -420,6 +512,201 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       }
     }
     setExpandedId(null);
+  };
+
+  const handleExportMissingStatusCsv = (file: UploadItem) => {
+    const id = file.id;
+    const filename = file.filename;
+    const table = fileData[id];
+    if (!table || table.length === 0) {
+      toast({
+        title: "Kein Inhalt verfügbar",
+        description: "Bitte Datei zuerst öffnen/laden.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const header = table[0] || [];
+    const validationRows = validationData[id]?.rows;
+    if (!Array.isArray(validationRows) || validationRows.length === 0) {
+      toast({
+        title: "Kein Vergleich vorhanden",
+        description: "Bitte zuerst mit dem Netzwerk vergleichen.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const statusColIndex = header.findIndex(
+      (col) => String(col || "").trim().toLowerCase() === "status in der uppr performance platform"
+    );
+
+    if (statusColIndex < 0) {
+      toast({
+        title: "Status-Spalte fehlt",
+        description: "Es wurde keine Status-Spalte in der Datei gefunden.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const rowsWithoutStatus = table
+      .slice(1)
+      .map((row, index) => ({ row, index }))
+      .filter(({ row, index }) => {
+        const statusValueInSheet = String((row?.[statusColIndex] ?? "")).trim();
+        const vRow = validationRows[index];
+        const statusCellFromCompare = vRow?.cells?.["Status in der uppr Performance Platform"];
+        const statusValueFromCompare =
+          statusCellFromCompare && typeof statusCellFromCompare === "object" && "value" in statusCellFromCompare
+            ? String(statusCellFromCompare.value ?? "").trim()
+            : "";
+
+        // Exportiere nur Zeilen, bei denen der Abgleich KEINEN Status liefern konnte.
+        return statusValueInSheet === "" && statusValueFromCompare === "";
+      })
+      .map(({ row, index }) => ({ row, sourceIndex: index }));
+
+    if (rowsWithoutStatus.length === 0) {
+      toast({
+        title: "Keine offenen Transaktionen",
+        description: "Alle Transaktionen haben bereits einen Status.",
+      });
+      return;
+    }
+
+    const networkHeaders = [
+      "id", "status", "timestamp", "campaign_id", "attribution", "delivered_tagcode_count",
+      "delivered_tagcode_serversided_url", "ordertoken", "source", "project_id", "admedia_id", "type",
+      "commission", "source_commission", "commission_group_id", "trigger_id", "description", "trigger_value",
+      "trigger_type", "turnover", "attributed_turnover", "zone_id", "zone_name", "original_turnover",
+      "action_id", "salary_id", "salary_timestamp", "session_id", "order_currency", "status_change_date",
+      "cancel_reason", "source_turnover", "last_change", "user_agent", "order_actions_id", "bonus_id",
+      "customer_journey_status", "ebestid", "order_timestamp", "action_timestamp", "trigger_title", "payoutdate",
+      "campaign_group_title", "project_title", "campaign_title", "advertiser_id", "advertiser_title", "publisher_id",
+      "referrer", "country", "subid", "publisher_prename", "publisher_surname", "publisher_searchtitle", "basket_items",
+      "sub_status", "visibility", "external_sources_entity_id", "external_sources_currency_code",
+      "external_sources_currency_rate", "external_sources_turnover", "source_project_id", "source_project_title",
+      "order_request_id", "billing_date", "has_trace", "turnover_brutto", "network_commission", "network_fee",
+      "network_fee_mode", "subid2", "bonh", "vc",
+    ];
+
+    const { publisherUser, advertiserUser, effectiveCampaign } = resolvePartnerContext(file);
+    const campaignId = effectiveCampaign?.id || validationCampaignId;
+    const campaignName = effectiveCampaign?.name || "campaign";
+
+    const fallbackCfg = resolveCampaignFromText(campaignName) || null;
+    const derivedProjectId = publisherUser?.project_id ? String(publisherUser.project_id) : "";
+    const derivedPublisherId = publisherUser?.publisher_id ? String(publisherUser.publisher_id) : "";
+    const derivedTriggerId = advertiserUser?.trigger_id
+      ? String(advertiserUser.trigger_id)
+      : (fallbackCfg?.triggerId || "");
+    const derivedCommissionGroupId = advertiserUser?.commission_group_id
+      ? String(advertiserUser.commission_group_id)
+      : (fallbackCfg?.commissionGroupId || "");
+
+    const sanitize = (value: unknown) =>
+      String(value ?? "")
+        .replace(/\r?\n/g, " ")
+        .replace(/;/g, ",")
+        .trim();
+
+    const normalizeTimestamp = (raw: string) => {
+      const val = sanitize(raw);
+      if (!val) return "";
+      // DD/MM/YY[YY] [HH:mm] -> YYYY-MM-DD HH:mm:00+01
+      const m = val.match(/^(\d{2})[./](\d{2})[./](\d{2}|\d{4})(?:\s+(\d{2}):(\d{2}))?$/);
+      if (m) {
+        const day = m[1];
+        const month = m[2];
+        const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+        const hh = m[4] ?? "00";
+        const mm = m[5] ?? "00";
+        return `${y}-${month}-${day} ${hh}:${mm}:00+01`;
+      }
+      return val;
+    };
+
+    const toNumberString = (raw: string) => {
+      const cleaned = sanitize(raw).replace(/[€\s]/g, "").replace(",", ".");
+      return cleaned;
+    };
+
+    const buildRowMap = (row: string[]) => {
+      const map: Record<string, string> = {};
+      header.forEach((h, i) => {
+        map[String(h || "").trim()] = String(row?.[i] ?? "");
+      });
+      return map;
+    };
+
+    const dataLines = rowsWithoutStatus.map(({ row, sourceIndex }, index) => {
+      const rowMap = buildRowMap(row);
+      const ordertoken = sanitize(rowMap["Ordertoken/OrderID"] || rowMap["Ordertoken/Order ID"]);
+      const timestamp = normalizeTimestamp(rowMap["Timestamp"] || "");
+      const publisherId = sanitize(rowMap["Publisher ID"]);
+      const subid = sanitize(rowMap["SubID"]);
+      const apiCommissionRaw = validationRows?.[sourceIndex]?.cells?.["Commission aus Netzwerk"]?.value;
+      const fallbackCommissionRaw = rowMap["Höhe der Provision (Optional)"] || "";
+      const commission = toNumberString(apiCommissionRaw || fallbackCommissionRaw);
+      const description = sanitize(rowMap["Grund der Anfrage"] || "");
+
+      const record: Record<string, string> = {};
+      networkHeaders.forEach((h) => (record[h] = ""));
+
+      record.id = "";
+      record.status = "0";
+      record.timestamp = timestamp;
+      record.campaign_id = campaignId;
+      record.ordertoken = ordertoken;
+      record.project_id = derivedProjectId;
+      record.trigger_id = derivedTriggerId;
+      record.commission_group_id = derivedCommissionGroupId;
+      record.description = description;
+      record.order_timestamp = timestamp;
+      record.action_timestamp = timestamp;
+      record.commission = commission;
+      record.source_commission = commission;
+      record.order_currency = "EUR";
+      record.campaign_title = campaignName;
+      record.advertiser_title = advertiserUser?.company || campaignName;
+      record.publisher_id = derivedPublisherId || publisherId;
+      record.subid = subid;
+      record.country = "DE";
+
+      return networkHeaders.map((h) => sanitize(record[h])).join(";");
+    });
+
+    const csvLines = [networkHeaders.join(";"), ...dataLines];
+    const csvContent = "\uFEFF" + csvLines.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const fileBase = campaignName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const ts = Math.floor(Date.now() / 1000);
+    link.href = url;
+    link.setAttribute("download", `orders-netzwerk.uppr.de-${fileBase}-${ts}.CSV`);
+    document.body.appendChild(link);
+    link.click();
+    link.parentNode?.removeChild(link);
+    window.URL.revokeObjectURL(url);
+
+    toast({
+      title: "CSV exportiert",
+      description: `${rowsWithoutStatus.length} Transaktionen ohne Status wurden exportiert.`,
+    });
+
+    if (!derivedProjectId || !derivedTriggerId) {
+      const missing: string[] = [];
+      if (!derivedProjectId) missing.push("project_id");
+      if (!derivedTriggerId) missing.push("trigger_id");
+      toast({
+        title: "Hinweis zu Partner-IDs",
+        description: `Nicht automatisch gefunden: ${missing.join(", ")}. Bitte Partner-Zuordnung prüfen.`,
+        variant: "destructive",
+      });
+    }
   };
 
   const hasFileChanges = (fileId: number): boolean => {
@@ -609,9 +896,19 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     if (rowIndex === 0) return null; // Header-Zeile
 
     const dataRow = v.rows[rowIndex - 1];
-    if (!dataRow?.cells) return null;
+    if (!dataRow?.cells) {
+      // #region agent log
+      if (rowIndex === 1) fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:getRowStatus',message:'No dataRow or cells',data:{fileId,rowIndex,hasV:!!v,rowsLen:v?.rows?.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      return null;
+    }
 
     const statusCell = dataRow.cells["Status in der uppr Performance Platform"];
+    if (rowIndex === 1 && statusCell && typeof statusCell === "object" && "value" in statusCell) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:getRowStatus',message:'Status found for row 1',data:{fileId,statusValue:statusCell.value},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+    }
     if (statusCell && typeof statusCell === "object" && "value" in statusCell) {
       const statusValue = statusCell.value;
       // Status-Werte: 0 - offen, 1 - bestätigt, 2 - storniert, 3 - ausgezahlt
@@ -798,24 +1095,49 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                     </div>
                   ) : fileData[file.id] && fileData[file.id].length > 0 ? (
                     <div className="mb-6">
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                         <Label className="text-pink-600 font-medium text-xs">
                           {file.filename} ({fileData[file.id].length} Zeilen)
                         </Label>
-                        {/* ✅ Aktualisieren-Button - immer anzeigen, Validierung nur auf Klick */}
-                        {!isValidating[file.id] && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleRefreshValidation(file.id)}
-                            className="h-7 text-[10px] px-2"
-                          >
-                            <RefreshCw className="h-3 w-3 mr-1" />
-                            {validationData[file.id]?.rows && validationData[file.id].rows.length > 0 
-                              ? "Aktualisieren" 
-                              : "Mit Netzwerk vergleichen"}
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-2">
+                          <Select value={validationCampaignId} onValueChange={setValidationCampaignId}>
+                            <SelectTrigger className="h-7 text-[10px] w-[180px]">
+                              <SelectValue placeholder="Kampagne (API)…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {validationCampaigns.map((c) => (
+                                <SelectItem key={c.id} value={c.id}>
+                                  {c.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {/* ✅ Aktualisieren-Button – ruft Backend-Validate auf (Orders-API mit campaignId) */}
+                          {!isValidating[file.id] && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRefreshValidation(file.id, file)}
+                              className="h-7 text-[10px] px-2"
+                            >
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                              {validationData[file.id]?.rows && validationData[file.id].rows.length > 0
+                                ? "Aktualisieren"
+                                : "Mit Netzwerk vergleichen"}
+                            </Button>
+                          )}
+                          {file.status === "feedback_submitted" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleExportMissingStatusCsv(file)}
+                              className="h-7 text-[10px] px-2"
+                              title="Exportiert alle Zeilen ohne Status als CSV"
+                            >
+                              CSV ohne Status exportieren
+                            </Button>
+                          )}
+                        </div>
                       </div>
 
                       {isValidating[file.id] && (
@@ -833,6 +1155,11 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                             />
                           </div>
                         </div>
+                      )}
+                      {!isValidating[file.id] && validationData[file.id]?.rows && (
+                        <p className="mb-2 text-[10px] text-gray-600">
+                          Netzwerk-Abgleich durchgeführt: {validationData[file.id]?.ordersCount ?? 0} Orders geladen.
+                        </p>
                       )}
 
                       <div className="overflow-auto max-h-[600px] border rounded-lg bg-white shadow-inner">

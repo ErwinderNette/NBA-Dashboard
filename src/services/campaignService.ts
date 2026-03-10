@@ -21,14 +21,14 @@ export const campaignService = {
   async getOrders(params: GetOrdersParams): Promise<CampaignOrder[]> {
     const {
       campaignId,
-      fromDate = '2024-08-01',
-      toDate = '2030-12-31',
+      fromDate = '2024-01-01',
+      toDate = '2027-05-05',
       paymentStatus = 'all',
       statusList = ['open', 'confirmed', 'canceled', 'paidout']
     } = params;
 
-    // Dynamischer URL-Aufbau basierend auf der Kampagne
-    const urlSuffix = `/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/${campaignId}/get-orders.json`;
+    // admin/5 bleibt fix, campaignId wird als Query-Parameter gesetzt.
+    const urlSuffix = '/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json';
     
     const queryParams = new URLSearchParams({
       'condition[period][from]': fromDate,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"nba-dashboard/internal/models"
 	"os"
+	"strings"
 	"time"
 
 	"log"
@@ -75,7 +76,7 @@ func createJWT(user models.User) (string, error) {
 	return token.SignedString([]byte(secret))
 }
 
-// AddInitialUsers legt drei Default-User an, falls sie noch nicht existieren
+// AddInitialUsers legt Default-User an und synchronisiert Partner-Metadaten.
 func AddInitialUsers(db *gorm.DB) {
 	users := []models.User{
 		{
@@ -83,28 +84,98 @@ func AddInitialUsers(db *gorm.DB) {
 			Email:        "admin@mail.de",
 			Role:         "admin",
 			PasswordHash: hashOrPanic("admin"),
+			Company:      "",
 		},
 		{
-			Name:         "Advertiser",
-			Email:        "advertiser@mail.de",
+			Name:         "NEW Energie",
+			Email:        "newenergie@advertiser.de",
 			Role:         "advertiser",
 			PasswordHash: hashOrPanic("4321"),
+			Company:      "NEW Energie",
+			CommissionGroupID: 912,
+			TriggerID:         6,
 		},
 		{
+			Name:         "eprimo",
+			Email:        "eprimo@advertiser.de",
+			Role:         "advertiser",
+			PasswordHash: hashOrPanic("4321"),
+			Company:      "eprimo",
+			CommissionGroupID: 394,
+			TriggerID:         1,
+		},
+		{
+			Name:         "Shoop",
+			Email:        "shoop@publisher.de",
+			Role:         "publisher",
+			PasswordHash: hashOrPanic("1234"),
+			Company:      "Shoop",
+			ProjectID:    50008,
+			PublisherID:  1008,
+		},
+		{
+			Name:         "Tellja",
+			Email:        "tellja@publisher.de",
+			Role:         "publisher",
+			PasswordHash: hashOrPanic("1234"),
+			Company:      "Tellja",
+			ProjectID:    5241536,
+			PublisherID:  1317,
+		},
+		{
+			// Legacy-Publisher bleibt für Rückwärtskompatibilität bestehen.
 			Name:         "Publisher",
 			Email:        "publisher@email.de",
 			Role:         "publisher",
 			PasswordHash: hashOrPanic("1234"),
+			Company:      "",
 		},
 	}
 	for _, u := range users {
 		var existing models.User
-		if err := db.Where("email = ?", u.Email).First(&existing).Error; err == gorm.ErrRecordNotFound {
-			if err := db.Create(&u).Error; err != nil {
-				log.Printf("Fehler beim Anlegen von User %s: %v", u.Email, err)
+		// Prüfe zuerst, ob der Benutzer bereits existiert
+		result := db.Where("email = ?", u.Email).First(&existing)
+		
+		if result.Error != nil {
+			// Benutzer existiert nicht, erstelle ihn
+			if result.Error == gorm.ErrRecordNotFound {
+				if err := db.Create(&u).Error; err != nil {
+					// Ignoriere "duplicate key" Fehler (kann bei Race Conditions auftreten)
+					if !isDuplicateKeyError(err) {
+						log.Printf("Fehler beim Anlegen von User %s: %v", u.Email, err)
+					}
+				} else {
+					log.Printf("✓ Benutzer erstellt: %s (%s)", u.Email, u.Role)
+				}
+			} else {
+				log.Printf("Fehler beim Prüfen von User %s: %v", u.Email, result.Error)
+			}
+		} else {
+			// Bestehende User mit Seed-Daten synchronisieren (wichtig für neue Partner-IDs).
+			existing.Name = u.Name
+			existing.Role = u.Role
+			existing.Company = u.Company
+			existing.PasswordHash = u.PasswordHash
+			existing.ProjectID = u.ProjectID
+			existing.PublisherID = u.PublisherID
+			existing.CommissionGroupID = u.CommissionGroupID
+			existing.TriggerID = u.TriggerID
+			if err := db.Save(&existing).Error; err != nil {
+				log.Printf("Fehler beim Aktualisieren von User %s: %v", u.Email, err)
 			}
 		}
 	}
+}
+
+// isDuplicateKeyError prüft, ob es sich um einen "duplicate key" Fehler handelt
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "duplicate key") || 
+		   strings.Contains(errStr, "23505") || 
+		   strings.Contains(errStr, "unique constraint")
 }
 
 func hashOrPanic(pw string) string {
