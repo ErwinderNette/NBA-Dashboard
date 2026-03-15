@@ -14,11 +14,12 @@ import (
 )
 
 type ExternalOrder struct {
-	OrderToken string `json:"ordertoken"`
-	SubID      string `json:"subid"`
-	Timestamp  string `json:"timestamp"`
-	Status     int    `json:"status"` // Status: 0=offen, 1=bestätigt, 2=storniert, 3=ausgezahlt
-	Commission string `json:"commission"`
+	ExternalOrderID   string `json:"id"`
+	OrderToken        string `json:"ordertoken"`
+	SubID             string `json:"subid"`
+	Timestamp         string `json:"timestamp"`
+	Status            int    `json:"status"` // Status: 0=offen, 1=bestätigt, 2=storniert, 3=ausgezahlt
+	Commission        string `json:"commission"`
 	ProjectID         string `json:"project_id"`
 	PublisherID       string `json:"publisher_id"`
 	CommissionGroupID string `json:"commission_group_id"`
@@ -200,6 +201,7 @@ func mapToOrderLoose(m map[string]any) ExternalOrder {
 		return -1 // -1 bedeutet "nicht gefunden"
 	}
 
+	externalOrderID := get("id", "external_order_id", "externalOrderId")
 	orderToken := get("ordertoken", "orderToken", "order_token", "orderid", "orderId")
 	subID := get("subid", "subId", "sub_id")
 	timestamp := get("timestamp", "time", "created_at", "createdAt")
@@ -217,11 +219,12 @@ func mapToOrderLoose(m map[string]any) ExternalOrder {
 	}
 
 	return ExternalOrder{
-		OrderToken: orderToken,
-		SubID:      subID,
-		Timestamp:  timestamp,
-		Status:     status,
-		Commission: commission,
+		ExternalOrderID:   externalOrderID,
+		OrderToken:        orderToken,
+		SubID:             subID,
+		Timestamp:         timestamp,
+		Status:            status,
+		Commission:        commission,
 		ProjectID:         projectID,
 		PublisherID:       publisherID,
 		CommissionGroupID: commissionGroupID,
@@ -234,7 +237,10 @@ func dedupeOrders(in []ExternalOrder) []ExternalOrder {
 	seen := map[string]struct{}{}
 	out := []ExternalOrder{}
 	for _, o := range in {
-		key := o.OrderToken + "|" + o.SubID + "|" + o.Timestamp
+		key := o.ExternalOrderID
+		if key == "" {
+			key = o.OrderToken + "|" + o.SubID + "|" + o.Timestamp
+		}
 		if _, ok := seen[key]; ok {
 			continue
 		}

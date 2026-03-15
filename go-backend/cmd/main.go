@@ -11,6 +11,7 @@ import (
 	"nba-dashboard/internal/handlers"
 	"nba-dashboard/internal/lib"
 	"nba-dashboard/internal/models"
+	"nba-dashboard/internal/services"
 
 	"gorm.io/gorm"
 
@@ -57,6 +58,8 @@ func main() {
 
 	// Lege Default-User an
 	handlers.AddInitialUsers(db)
+	// Starte Smart-Scheduler für Kampagnen-Sync (DB-Cache statt Live-API pro Request)
+	services.StartCampaignSyncScheduler(db)
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -65,7 +68,7 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
-	
+
 	// CORS-Konfiguration: Erlaube alle Origins für Entwicklung
 	// In Produktion sollte dies auf spezifische Domains beschränkt werden
 	app.Use(cors.New(cors.Config{
@@ -99,6 +102,13 @@ func main() {
 	app.Get("/api/uploads/:id/validation", handlers.AuthRequired(), handlers.HandleGetValidation(db))
 	// ✅ Alle Validierungsergebnisse auf einmal laden
 	app.Get("/api/uploads/validations", handlers.AuthRequired(), handlers.HandleGetAllValidations(db))
+	// Nachbuchungen CSV: persistieren + versioniert archivieren
+	app.Post("/api/uploads/:id/bookings/csv", handlers.AuthRequired(), handlers.HandleCreateBookingCSVExport(db))
+	app.Get("/api/bookings/csv-exports/:exportId/download", handlers.AuthRequired(), handlers.HandleDownloadBookingCSVExport(db))
+	// Campaign Sync / Cache Status
+	app.Get("/api/campaigns/:campaignId/sync-status", handlers.AuthRequired(), handlers.HandleGetCampaignSyncStatus(db))
+	app.Post("/api/campaigns/:campaignId/sync-now", handlers.AuthRequired(), handlers.HandleSyncCampaignNow(db))
+	app.Get("/api/campaigns/scheduler/monitoring", handlers.AuthRequired(), handlers.HandleGetSchedulerMonitoring(db))
 
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))

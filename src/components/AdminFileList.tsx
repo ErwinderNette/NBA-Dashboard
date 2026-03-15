@@ -514,9 +514,8 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     setExpandedId(null);
   };
 
-  const handleExportMissingStatusCsv = (file: UploadItem) => {
+  const handleExportMissingStatusCsv = async (file: UploadItem) => {
     const id = file.id;
-    const filename = file.filename;
     const table = fileData[id];
     if (!table || table.length === 0) {
       toast({
@@ -641,7 +640,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       return map;
     };
 
-    const dataLines = rowsWithoutStatus.map(({ row, sourceIndex }, index) => {
+    const dataRecords = rowsWithoutStatus.map(({ row, sourceIndex }) => {
       const rowMap = buildRowMap(row);
       const ordertoken = sanitize(rowMap["Ordertoken/OrderID"] || rowMap["Ordertoken/Order ID"]);
       const timestamp = normalizeTimestamp(rowMap["Timestamp"] || "");
@@ -675,27 +674,33 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       record.subid = subid;
       record.country = "DE";
 
-      return networkHeaders.map((h) => sanitize(record[h])).join(";");
+      return Object.fromEntries(
+        networkHeaders.map((h) => [h, sanitize(record[h])])
+      ) as Record<string, string>;
     });
 
-    const csvLines = [networkHeaders.join(";"), ...dataLines];
-    const csvContent = "\uFEFF" + csvLines.join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const fileBase = campaignName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    const ts = Math.floor(Date.now() / 1000);
-    link.href = url;
-    link.setAttribute("download", `orders-netzwerk.uppr.de-${fileBase}-${ts}.CSV`);
-    document.body.appendChild(link);
-    link.click();
-    link.parentNode?.removeChild(link);
-    window.URL.revokeObjectURL(url);
-
-    toast({
-      title: "CSV exportiert",
-      description: `${rowsWithoutStatus.length} Transaktionen ohne Status wurden exportiert.`,
-    });
+    try {
+      const exportResult = await uploadService.exportBookingCsv(id, {
+        campaignId: String(campaignId || ""),
+        campaignName: String(campaignName || "campaign"),
+        headers: networkHeaders,
+        records: dataRecords,
+        overwriteLatest: true,
+      });
+      await uploadService.downloadBookingCsvExport(exportResult.csvExportId, exportResult.fileName);
+      toast({
+        title: "CSV exportiert",
+        description: `${rowsWithoutStatus.length} Transaktionen ohne Status wurden exportiert (Version ${exportResult.version}).`,
+      });
+    } catch (err) {
+      console.error("❌ exportBookingCsv error", err);
+      toast({
+        title: "CSV Export fehlgeschlagen",
+        description: "Die Nachbuchungen konnten nicht gespeichert/exportiert werden.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     if (!derivedProjectId || !derivedTriggerId) {
       const missing: string[] = [];

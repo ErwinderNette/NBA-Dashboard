@@ -27,7 +27,20 @@ func InitDB() *gorm.DB {
 	}
 
 	// Migration
-	if err := db.AutoMigrate(&models.User{}, &models.Upload{}, &models.ValidationResult{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.User{},
+		&models.Upload{},
+		&models.ValidationResult{},
+		&models.Campaign{},
+		&models.CampaignSyncRun{},
+		&models.CampaignOrder{},
+		&models.BookingBatch{},
+		&models.BookingItem{},
+		&models.CSVExport{},
+		&models.OutboundJob{},
+		&models.AuditEvent{},
+		&models.UploadOrderCandidate{},
+	); err != nil {
 		log.Fatalf("failed to migrate tables: %v", err)
 	}
 

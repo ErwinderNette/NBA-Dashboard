@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func HandleValidateUpload(db *gorm.DB) fiber.Handler {
@@ -49,8 +51,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		headerIdx := lib.FindHeaderRow(raw, services.Pflichtfelder)
 		rows := lib.TableToMaps(raw, headerIdx)
 
-		apiURL := os.Getenv("NETWORK_API_URL")
-		baseURL := os.Getenv("NETWORK_API_BASE_URL")
 		campaignId := strings.TrimSpace(c.Query("campaignId"))
 		fromDate := "2024-01-01"
 		toDate := "2027-05-05"
@@ -59,31 +59,20 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 			toDate = dynamicTo
 		}
 
-		// Wenn campaignId übergeben wird, Orders-URL aus Basis-URL bauen:
-		// admin/5 bleibt fix, nur condition[l:campaigns] ist dynamisch.
-		if campaignId != "" && baseURL != "" {
-			path := "/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json"
-			apiURL = baseURL + path + "?condition[period][from]=" + fromDate + "&condition[period][to]=" + toDate + "&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=" + campaignId
-		}
-		// Wenn Kampagne übergeben wurde, aber keine Netzwerk-URL konfiguriert ist, klaren Fehler liefern.
-		if campaignId != "" && apiURL == "" {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Network API is not configured",
-				"detail": "Set NETWORK_API_BASE_URL (preferred) or NETWORK_API_URL in go-backend/.env",
-			})
-		}
 		var orders []services.ExternalOrder
+		useDBCache := isDBValidationCacheEnabled()
+		forceRefresh := strings.EqualFold(strings.TrimSpace(c.Query("forceRefresh")), "true") || strings.TrimSpace(c.Query("forceRefresh")) == "1"
 
 		// #region agent log
 		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			entry := map[string]interface{}{
 				"location": "validate_upload.go", "message": "Validate started",
 				"data": map[string]interface{}{
-					"networkApiUrlSet": apiURL != "",
-					"uploadId":         c.Params("id"),
-					"campaignId":       campaignId,
-					"fromDate":         fromDate,
-					"toDate":           toDate,
+					"useDBCache": useDBCache,
+					"uploadId":   c.Params("id"),
+					"campaignId": campaignId,
+					"fromDate":   fromDate,
+					"toDate":     toDate,
 				},
 				"hypothesisId": "B",
 			}
@@ -94,28 +83,85 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		}
 		// #endregion
 
-		if apiURL != "" {
-			log.Printf("🌍 ValidateUpload Network-Call: campaignId=%s from=%s to=%s baseURLSet=%t apiURL=%s", campaignId, fromDate, toDate, baseURL != "", apiURL)
-			ordersSvc := services.NewOrdersService(apiURL)
-			var err error
-			orders, err = ordersSvc.GetOrders(c.Context())
+		if campaignId != "" && useDBCache {
+			if err := upsertUploadOrderCandidates(db, upload.ID, campaignId, rows); err != nil {
+				log.Printf("⚠️ UploadOrderCandidates konnten nicht persistiert werden: %v", err)
+			}
+
+			campaign, err := ensureCampaignByExternalID(db, campaignId)
 			if err != nil {
-				log.Println("❌ Network API error:", err)
-				return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-					"error":  "Network API error",
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error":  "Failed to resolve campaign",
 					"detail": err.Error(),
 				})
 			}
-			log.Printf("✅ Orders von API geladen: %d", len(orders))
-		} else {
-			log.Println("ℹ️ NETWORK_API_URL / NETWORK_API_BASE_URL nicht gesetzt und/oder keine campaignId – Validierung läuft ohne Order-Abgleich (nur Pflichtfelder)")
+
+			shouldSync := forceRefresh
+			if campaign.LastSyncedAt == nil {
+				shouldSync = true
+			} else {
+				syncInterval := time.Duration(campaign.SyncIntervalMins) * time.Minute
+				if syncInterval <= 0 {
+					syncInterval = 30 * time.Minute
+				}
+				if time.Since(*campaign.LastSyncedAt) > syncInterval {
+					shouldSync = true
+				}
+			}
+
+			if !shouldSync {
+				var existingCount int64
+				if err := db.Model(&models.CampaignOrder{}).Where("campaign_id = ?", campaign.ID).Count(&existingCount).Error; err != nil {
+					log.Printf("⚠️ campaign_orders count failed: %v", err)
+				}
+				if existingCount == 0 {
+					shouldSync = true
+				}
+			}
+
+			if shouldSync {
+				syncSvc := services.NewCampaignSyncService()
+				_, _, syncErr := syncSvc.SyncCampaign(c.Context(), db, &campaign, fromDate, toDate)
+				if syncErr != nil {
+					log.Printf("⚠️ Campaign-Sync fehlgeschlagen, fallback auf Live-API: %v", syncErr)
+				}
+			}
+
+			orders, err = loadOrdersForUploadFromDB(db, upload.ID, campaign.ID, fromDate, toDate)
+			if err != nil {
+				log.Printf("⚠️ DB-Load für campaign_orders fehlgeschlagen, fallback auf Live-API: %v", err)
+			} else {
+				log.Printf("✅ Orders aus DB-Cache geladen: %d", len(orders))
+			}
+		}
+
+		if campaignId != "" && len(orders) == 0 {
+			baseURL := os.Getenv("NETWORK_API_BASE_URL")
+			apiURL := os.Getenv("NETWORK_API_URL")
+			if baseURL != "" {
+				path := "/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json"
+				apiURL = baseURL + path + "?condition[period][from]=" + fromDate + "&condition[period][to]=" + toDate + "&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=" + campaignId
+			}
+			if apiURL != "" {
+				ordersSvc := services.NewOrdersService(apiURL)
+				orders, err = ordersSvc.GetOrders(c.Context())
+				if err != nil {
+					log.Printf("❌ Live-API fallback failed: %v", err)
+				} else {
+					log.Printf("✅ Orders per Live-API geladen (fallback): %d", len(orders))
+				}
+			}
+		}
+
+		if campaignId == "" {
+			log.Println("ℹ️ Keine campaignId übergeben – Validierung läuft ohne Order-Abgleich (nur Pflichtfelder/Fallbacks)")
 		}
 
 		// #region agent log
 		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			entry := map[string]interface{}{
 				"location": "validate_upload.go", "message": "Orders loaded",
-				"data": map[string]interface{}{"ordersCount": len(orders), "fromDate": fromDate, "toDate": toDate},
+				"data":         map[string]interface{}{"ordersCount": len(orders), "fromDate": fromDate, "toDate": toDate},
 				"hypothesisId": "B,D",
 			}
 			if b, e := json.Marshal(entry); e == nil {
@@ -157,7 +203,7 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			entry := map[string]interface{}{
 				"location": "validate_upload.go", "message": "After Validate",
-				"data": map[string]interface{}{"validatedRows": len(validated), "firstRowStatus": firstStatus},
+				"data":         map[string]interface{}{"validatedRows": len(validated), "firstRowStatus": firstStatus},
 				"hypothesisId": "B,C,E",
 			}
 			if b, e := json.Marshal(entry); e == nil {
@@ -208,7 +254,7 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			entry := map[string]interface{}{
 				"location": "validate_upload.go", "message": "DB save result",
-				"data": map[string]interface{}{"uploadId": upload.ID, "saveOK": saveOK},
+				"data":         map[string]interface{}{"uploadId": upload.ID, "saveOK": saveOK},
 				"hypothesisId": "D,E",
 			}
 			if b, e := json.Marshal(entry); e == nil {
@@ -296,6 +342,177 @@ func normalizeUintQuery(raw string) string {
 	return strconv.FormatUint(n, 10)
 }
 
+func isDBValidationCacheEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("VALIDATION_DB_CACHE_ENABLED")))
+	if value == "" {
+		return true
+	}
+	return value == "1" || value == "true" || value == "yes"
+}
+
+func ensureCampaignByExternalID(db *gorm.DB, externalID string) (models.Campaign, error) {
+	var campaign models.Campaign
+	err := db.Where("external_campaign_id = ?", externalID).First(&campaign).Error
+	if err == nil {
+		return campaign, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return campaign, err
+	}
+	campaign = models.Campaign{
+		ExternalCampaignID: strings.TrimSpace(externalID),
+		Name:               fmt.Sprintf("Campaign %s", strings.TrimSpace(externalID)),
+		SyncIntervalMins:   30,
+		IsActive:           true,
+	}
+	return campaign, db.Create(&campaign).Error
+}
+
+func upsertUploadOrderCandidates(db *gorm.DB, uploadID uint, campaignID string, rows []map[string]string) error {
+	now := time.Now()
+	candidates := make([]models.UploadOrderCandidate, 0, len(rows))
+	for i, row := range rows {
+		orderToken := strings.TrimSpace(row["Ordertoken/OrderID"])
+		if orderToken == "" {
+			orderToken = strings.TrimSpace(row["Ordertoken/Order ID"])
+		}
+		if orderToken == "" {
+			for key, value := range row {
+				if strings.Contains(strings.ToLower(key), "order") && strings.TrimSpace(value) != "" {
+					orderToken = strings.TrimSpace(value)
+					break
+				}
+			}
+		}
+
+		rawRow := make(map[string]any, len(row))
+		for k, v := range row {
+			rawRow[k] = v
+		}
+
+		candidates = append(candidates, models.UploadOrderCandidate{
+			UploadID:           uploadID,
+			RowNo:              i + 1,
+			CampaignExternalID: strings.TrimSpace(campaignID),
+			OrderToken:         orderToken,
+			SubID:              strings.TrimSpace(row["SubID"]),
+			TimestampRaw:       strings.TrimSpace(row["Timestamp"]),
+			Commission:         strings.TrimSpace(row["Höhe der Provision (Optional)"]),
+			RawRow:             rawRow,
+			LastValidatedAt:    &now,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "upload_id"},
+			{Name: "row_no"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"campaign_external_id",
+			"order_token",
+			"sub_id",
+			"timestamp_raw",
+			"commission",
+			"raw_row",
+			"last_validated_at",
+			"updated_at",
+		}),
+	}).Create(&candidates).Error
+}
+
+func loadOrdersForUploadFromDB(db *gorm.DB, uploadID uint, campaignDBID uint, fromDate string, toDate string) ([]services.ExternalOrder, error) {
+	var candidates []models.UploadOrderCandidate
+	if err := db.Where("upload_id = ?", uploadID).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+
+	tokenSet := map[string]struct{}{}
+	subIDSet := map[string]struct{}{}
+	for _, c := range candidates {
+		if v := strings.TrimSpace(c.OrderToken); v != "" {
+			tokenSet[v] = struct{}{}
+		}
+		if v := strings.TrimSpace(c.SubID); v != "" {
+			subIDSet[v] = struct{}{}
+		}
+	}
+
+	tokens := make([]string, 0, len(tokenSet))
+	for k := range tokenSet {
+		tokens = append(tokens, k)
+	}
+	subIDs := make([]string, 0, len(subIDSet))
+	for k := range subIDSet {
+		subIDs = append(subIDs, k)
+	}
+
+	query := db.Model(&models.CampaignOrder{}).Where("campaign_id = ?", campaignDBID)
+	if len(tokens) > 0 || len(subIDs) > 0 {
+		if len(tokens) > 0 && len(subIDs) > 0 {
+			query = query.Where("(order_token IN ? OR sub_id IN ?)", tokens, subIDs)
+		} else if len(tokens) > 0 {
+			query = query.Where("order_token IN ?", tokens)
+		} else {
+			query = query.Where("sub_id IN ?", subIDs)
+		}
+	} else {
+		// Fallback: kleines Zeitfenster statt kompletter Kampagnentabelle
+		fromTime, fromErr := time.Parse("2006-01-02", strings.TrimSpace(fromDate))
+		toTime, toErr := time.Parse("2006-01-02", strings.TrimSpace(toDate))
+		if fromErr == nil && toErr == nil {
+			query = query.Where("event_timestamp >= ? AND event_timestamp <= ?", fromTime, toTime.Add(24*time.Hour))
+		}
+	}
+
+	var records []models.CampaignOrder
+	if err := query.Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]services.ExternalOrder, 0, len(records))
+	for _, rec := range records {
+		timestamp := ""
+		if rec.EventTimestamp != nil {
+			timestamp = rec.EventTimestamp.Format("2006-01-02 15:04:05")
+		}
+
+		order := services.ExternalOrder{
+			ExternalOrderID: rec.ExternalOrderID,
+			OrderToken:      rec.OrderToken,
+			SubID:           rec.SubID,
+			Timestamp:       timestamp,
+			Status:          rec.Status,
+			Commission:      rec.Commission,
+		}
+		order.ProjectID = payloadMapString(rec.Payload, "project_id")
+		order.PublisherID = payloadMapString(rec.Payload, "publisher_id")
+		order.CommissionGroupID = payloadMapString(rec.Payload, "commission_group_id")
+		order.TriggerID = payloadMapString(rec.Payload, "trigger_id")
+		order.CampaignID = payloadMapString(rec.Payload, "campaign_id")
+		out = append(out, order)
+	}
+	return out, nil
+}
+
+func payloadMapString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	value := strings.TrimSpace(fmt.Sprint(raw))
+	if value == "" || value == "<nil>" {
+		return ""
+	}
+	return value
+}
+
 // HandleGetValidation lädt gespeicherte Validierungsergebnisse für einen Upload
 func HandleGetValidation(db *gorm.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -325,10 +542,10 @@ func HandleGetValidation(db *gorm.DB) fiber.Handler {
 			// Keine Validierung gefunden - für das Frontend als normaler Empty-State behandeln.
 			log.Printf("ℹ️ GetValidation - Keine Validierung für UploadID=%s gefunden (empty state)", id)
 			return c.JSON(fiber.Map{
-				"uploadId":    upload.ID,
-				"ordersCount": 0,
-				"rows":        []models.ValidatedRow{},
-				"validatedAt": nil,
+				"uploadId":      upload.ID,
+				"ordersCount":   0,
+				"rows":          []models.ValidatedRow{},
+				"validatedAt":   nil,
 				"hasValidation": false,
 			})
 		}
@@ -346,10 +563,10 @@ func HandleGetValidation(db *gorm.DB) fiber.Handler {
 		}
 
 		return c.JSON(fiber.Map{
-			"uploadId":    validationResult.UploadID,
-			"ordersCount": validationResult.OrdersCount,
-			"rows":        validationResult.ValidatedRows,
-			"validatedAt": validationResult.ValidatedAt,
+			"uploadId":      validationResult.UploadID,
+			"ordersCount":   validationResult.OrdersCount,
+			"rows":          validationResult.ValidatedRows,
+			"validatedAt":   validationResult.ValidatedAt,
 			"hasValidation": true,
 		})
 	}

@@ -1,6 +1,22 @@
 import api from './api';
 import { UploadItem } from '@/types/upload';
 
+export interface BookingCSVExportPayload {
+  campaignId: string;
+  campaignName: string;
+  headers: string[];
+  records: Array<Record<string, string>>;
+  overwriteLatest?: boolean;
+}
+
+export interface BookingCSVExportResponse {
+  batchId: number;
+  csvExportId: number;
+  version: number;
+  fileName: string;
+  rowsCount: number;
+}
+
 export const uploadService = {
   // Get all uploads
   getUploads: async (): Promise<UploadItem[]> => {
@@ -144,4 +160,26 @@ export const uploadService = {
         return {};
       }
     },
-}; 
+
+    exportBookingCsv: async (
+      uploadId: number,
+      payload: BookingCSVExportPayload
+    ): Promise<BookingCSVExportResponse> => {
+      const response = await api.post(`/uploads/${uploadId}/bookings/csv`, payload);
+      return response.data;
+    },
+
+    downloadBookingCsvExport: async (csvExportId: number, filename?: string): Promise<void> => {
+      const response = await api.get(`/bookings/csv-exports/${csvExportId}/download`, {
+        responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename || `booking_export_${csvExportId}.CSV`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    },
+};
