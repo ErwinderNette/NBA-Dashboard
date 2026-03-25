@@ -1,0 +1,59 @@
+name: Release Checks
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-checks:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: go-backend/go.sum
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Test backend
+        working-directory: go-backend
+        run: go test ./...
+
+      - name: Build backend binary
+        working-directory: go-backend
+        run: go build -o app ./cmd
+
+      - name: Upload frontend dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist
+          if-no-files-found: error
+
+      - name: Upload backend binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-binary
+          path: go-backend/app
+          if-no-files-found: error

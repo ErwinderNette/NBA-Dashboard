@@ -16,16 +16,31 @@ const Login = () => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '';
+    const loginUrl = `${apiBaseUrl}/login`;
 
     try {
-      console.log("API URL:", import.meta.env.VITE_API_BASE_URL);
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/login`, {
+      console.log("API URL:", apiBaseUrl);
+      const response = await fetch(loginUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
       if (!response.ok) {
-        throw new Error('Login fehlgeschlagen');
+        let backendError = 'Login fehlgeschlagen';
+        try {
+          const errorPayload = await response.json();
+          if (errorPayload?.error) {
+            backendError = String(errorPayload.error);
+          }
+        } catch {
+          // keep default message
+        }
+
+        if (response.status === 401) {
+          throw new Error('INVALID_CREDENTIALS');
+        }
+        throw new Error(`SERVER_ERROR:${backendError}`);
       }
       const data = await response.json();
       console.log("Login-Response:", data);
@@ -51,9 +66,20 @@ const Login = () => {
       }
     } catch (err) {
       console.error("Login-Fehler:", err);
+      const message = err instanceof Error ? err.message : '';
+      let description = 'Unbekannter Fehler beim Login.';
+
+      if (message === 'INVALID_CREDENTIALS') {
+        description = 'E-Mail oder Passwort ist falsch.';
+      } else if (message.startsWith('SERVER_ERROR:')) {
+        description = message.replace('SERVER_ERROR:', '').trim() || 'Serverfehler beim Login.';
+      } else if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+        description = `Backend nicht erreichbar oder CORS blockiert. Prüfe API-URL (${loginUrl}) und CORS_ALLOW_ORIGINS.`;
+      }
+
       toast({
         title: 'Login fehlgeschlagen',
-        description: 'E-Mail oder Passwort ist falsch.',
+        description,
         variant: 'destructive',
       });
     } finally {

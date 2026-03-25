@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment and local secrets
+.env
+go-backend/.env
+.env.production
+go-backend/.env.production
+
+# Generated and sensitive data artifacts
+go-backend/uploads/
+go-backend/.git_broken_backup/
+.git_broken_backup/

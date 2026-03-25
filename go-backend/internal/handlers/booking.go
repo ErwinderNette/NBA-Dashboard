@@ -163,8 +163,18 @@ func HandleCreateBookingCSVExport(db *gorm.DB) fiber.Handler {
 				}
 			}
 
+			seenDedupeKeys := map[string]int{}
 			for i, rec := range req.Records {
-				dedupeKey := bookingDedupe(req.CampaignID, rec)
+				baseDedupeKey := bookingDedupe(req.CampaignID, rec)
+				dedupeKey := baseDedupeKey
+				if count, exists := seenDedupeKeys[baseDedupeKey]; exists {
+					count++
+					seenDedupeKeys[baseDedupeKey] = count
+					// Keep rows exportable even when source records collide on dedupe fields.
+					dedupeKey = fmt.Sprintf("%s#%d", baseDedupeKey, count)
+				} else {
+					seenDedupeKeys[baseDedupeKey] = 1
+				}
 				item := models.BookingItem{
 					BatchID:         batch.ID,
 					RowNo:           i + 1,

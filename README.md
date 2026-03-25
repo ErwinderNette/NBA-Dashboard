@@ -117,6 +117,14 @@ go build → Binary auf Server, Port 3001
 
 ---
 
+## 🧭 Betrieb & Go-Live
+
+- Produktions-Runbook: `PROD_RUNBOOK.md`
+- Formale Go-Live Checkliste: `GO_LIVE_CHECKLIST.md`
+- DB/Sync/Monitoring-Doku: `DB_SYNC_DOKU.md`
+
+---
+
 ## 🤝 Beitragen
 
 1. Fork das Repository

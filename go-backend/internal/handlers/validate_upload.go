@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -34,7 +33,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can validate"})
 		}
 
-		const debugLogPath = "/Users/erwinsawitzki/Documents/NBA-Dashboard/.cursor/debug.log"
 		id := c.Params("id")
 		log.Println("✅ ValidateUpload aufgerufen für UploadID=", id)
 
@@ -62,26 +60,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		var orders []services.ExternalOrder
 		useDBCache := isDBValidationCacheEnabled()
 		forceRefresh := strings.EqualFold(strings.TrimSpace(c.Query("forceRefresh")), "true") || strings.TrimSpace(c.Query("forceRefresh")) == "1"
-
-		// #region agent log
-		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			entry := map[string]interface{}{
-				"location": "validate_upload.go", "message": "Validate started",
-				"data": map[string]interface{}{
-					"useDBCache": useDBCache,
-					"uploadId":   c.Params("id"),
-					"campaignId": campaignId,
-					"fromDate":   fromDate,
-					"toDate":     toDate,
-				},
-				"hypothesisId": "B",
-			}
-			if b, e := json.Marshal(entry); e == nil {
-				f.Write(append(b, '\n'))
-			}
-			f.Close()
-		}
-		// #endregion
 
 		if campaignId != "" && useDBCache {
 			if err := upsertUploadOrderCandidates(db, upload.ID, campaignId, rows); err != nil {
@@ -157,20 +135,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 			log.Println("ℹ️ Keine campaignId übergeben – Validierung läuft ohne Order-Abgleich (nur Pflichtfelder/Fallbacks)")
 		}
 
-		// #region agent log
-		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			entry := map[string]interface{}{
-				"location": "validate_upload.go", "message": "Orders loaded",
-				"data":         map[string]interface{}{"ordersCount": len(orders), "fromDate": fromDate, "toDate": toDate},
-				"hypothesisId": "B,D",
-			}
-			if b, e := json.Marshal(entry); e == nil {
-				f.Write(append(b, '\n'))
-			}
-			f.Close()
-		}
-		// #endregion
-
 		if orders == nil {
 			orders = []services.ExternalOrder{}
 		}
@@ -184,12 +148,9 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		}
 		validated := validationSvc.Validate(rows, orders, validationCtx)
 
-		// Debug: Prüfe ob Status in der ersten Zeile ist
-		var firstStatus string
 		if len(validated) > 0 {
 			firstRow := validated[0]
 			if statusCell, ok := firstRow.Cells["Status in der uppr Performance Platform"]; ok {
-				firstStatus = statusCell.Value
 				log.Printf("✅ Handler - Status in erster Zeile gefunden: '%s'", statusCell.Value)
 			} else {
 				keys := make([]string, 0, len(firstRow.Cells))
@@ -199,20 +160,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 				log.Printf("❌ Handler - Status NICHT in erster Zeile! Keys: %v", keys)
 			}
 		}
-		// #region agent log
-		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			entry := map[string]interface{}{
-				"location": "validate_upload.go", "message": "After Validate",
-				"data":         map[string]interface{}{"validatedRows": len(validated), "firstRowStatus": firstStatus},
-				"hypothesisId": "B,C,E",
-			}
-			if b, e := json.Marshal(entry); e == nil {
-				f.Write(append(b, '\n'))
-			}
-			f.Close()
-		}
-		// #endregion
-
 		// ✅ Speichere Validierungsergebnisse in der Datenbank
 		validationResult := models.ValidationResult{
 			UploadID:      upload.ID,
@@ -222,7 +169,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 
 		// Prüfe ob bereits ein Ergebnis existiert
 		var existingResult models.ValidationResult
-		saveOK := false
 		if err := db.Where("upload_id = ?", upload.ID).First(&existingResult).Error; err == nil {
 			// Update existierendes Ergebnis
 			existingResult.OrdersCount = len(orders)
@@ -234,7 +180,6 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 					"detail": err.Error(),
 				})
 			} else {
-				saveOK = true
 				log.Printf("✅ Validierungsergebnisse aktualisiert für UploadID=%d", upload.ID)
 			}
 		} else {
@@ -246,24 +191,9 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 					"detail": err.Error(),
 				})
 			} else {
-				saveOK = true
 				log.Printf("✅ Validierungsergebnisse gespeichert für UploadID=%d", upload.ID)
 			}
 		}
-		// #region agent log
-		if f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-			entry := map[string]interface{}{
-				"location": "validate_upload.go", "message": "DB save result",
-				"data":         map[string]interface{}{"uploadId": upload.ID, "saveOK": saveOK},
-				"hypothesisId": "D,E",
-			}
-			if b, e := json.Marshal(entry); e == nil {
-				f.Write(append(b, '\n'))
-			}
-			f.Close()
-		}
-		// #endregion
-
 		return c.JSON(fiber.Map{
 			"uploadId":    upload.ID,
 			"ordersCount": len(orders),

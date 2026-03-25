@@ -85,8 +85,8 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     { id: "122", name: "eprimo Kampagne" },
     { id: "207", name: "Ankerkraut Kampagne" },
   ];
-  const campaignConfigByKey: Record<string, { id: string; name: string; commissionGroupId?: string; triggerId?: string }> = {
-    "newenergie": { id: "260", name: "NEW Energie", commissionGroupId: "912", triggerId: "6" },
+  const campaignConfigByKey: Record<string, { id: string; name: string; commissionGroupId?: string; triggerId?: string; advertiserId?: string }> = {
+    "newenergie": { id: "260", name: "NEW Energie", commissionGroupId: "912", triggerId: "6", advertiserId: "167" },
     "eprimo": { id: "122", name: "eprimo", commissionGroupId: "394", triggerId: "1" },
     "ankerkraut": { id: "207", name: "Ankerkraut" },
   };
@@ -526,51 +526,12 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       return;
     }
 
-    const header = table[0] || [];
     const validationRows = validationData[id]?.rows;
     if (!Array.isArray(validationRows) || validationRows.length === 0) {
       toast({
         title: "Kein Vergleich vorhanden",
         description: "Bitte zuerst mit dem Netzwerk vergleichen.",
         variant: "destructive",
-      });
-      return;
-    }
-
-    const statusColIndex = header.findIndex(
-      (col) => String(col || "").trim().toLowerCase() === "status in der uppr performance platform"
-    );
-
-    if (statusColIndex < 0) {
-      toast({
-        title: "Status-Spalte fehlt",
-        description: "Es wurde keine Status-Spalte in der Datei gefunden.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    const rowsWithoutStatus = table
-      .slice(1)
-      .map((row, index) => ({ row, index }))
-      .filter(({ row, index }) => {
-        const statusValueInSheet = String((row?.[statusColIndex] ?? "")).trim();
-        const vRow = validationRows[index];
-        const statusCellFromCompare = vRow?.cells?.["Status in der uppr Performance Platform"];
-        const statusValueFromCompare =
-          statusCellFromCompare && typeof statusCellFromCompare === "object" && "value" in statusCellFromCompare
-            ? String(statusCellFromCompare.value ?? "").trim()
-            : "";
-
-        // Exportiere nur Zeilen, bei denen der Abgleich KEINEN Status liefern konnte.
-        return statusValueInSheet === "" && statusValueFromCompare === "";
-      })
-      .map(({ row, index }) => ({ row, sourceIndex: index }));
-
-    if (rowsWithoutStatus.length === 0) {
-      toast({
-        title: "Keine offenen Transaktionen",
-        description: "Alle Transaktionen haben bereits einen Status.",
       });
       return;
     }
@@ -591,11 +552,115 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       "network_fee_mode", "subid2", "bonh", "vc",
     ];
 
+    const normalizeHeader = (value: string) =>
+      String(value || "")
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const requiredHeaderCandidates = [
+      ["publisher id"],
+      ["subid", "sub id"],
+      ["timestamp"],
+      ["grund der anfrage"],
+      ["ordertoken/orderid", "ordertoken/order id", "ordertoken"],
+    ];
+
+    const findHeaderRowIndex = (rows: string[][]) => {
+      let bestIdx = 0;
+      let bestScore = -1;
+      rows.forEach((row, rowIndex) => {
+        if (!Array.isArray(row)) return;
+        const normalized = new Set(row.map((cell) => normalizeHeader(String(cell ?? ""))));
+        let score = 0;
+        for (const candidates of requiredHeaderCandidates) {
+          if (candidates.some((name) => normalized.has(name))) score += 1;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = rowIndex;
+        }
+      });
+      return bestIdx;
+    };
+
+    const headerRowIndex = findHeaderRowIndex(table);
+    const header = table[headerRowIndex] || [];
+    const dataRows = table.slice(headerRowIndex + 1).map((row, dataIndex) => ({ row, dataIndex }));
+
+    const statusColIndex = header.findIndex(
+      (col) => normalizeHeader(String(col || "")) === "status in der uppr performance platform"
+    );
+
+    const headerAliases: Record<string, string[]> = {
+      id: ["id"],
+      status: ["status", "status in der uppr performance platform"],
+      timestamp: ["timestamp"],
+      campaign_id: ["campaign_id", "campaign id"],
+      ordertoken: ["ordertoken", "ordertoken/orderid", "ordertoken/order id", "ordertoken/orderid ", "ordertoken/order id "],
+      source: ["source"],
+      project_id: ["project_id", "project id"],
+      commission: ["commission", "höhe der provision", "höhe der provision (optional)"],
+      source_commission: ["source_commission", "source commission", "commission"],
+      commission_group_id: ["commission_group_id", "commission group id"],
+      trigger_id: ["trigger_id", "trigger id"],
+      description: ["description", "grund der anfrage"],
+      order_currency: ["order_currency", "order currency", "währung"],
+      campaign_title: ["campaign_title", "campaign title", "kampagne"],
+      advertiser_id: ["advertiser_id", "advertiser id"],
+      advertiser_title: ["advertiser_title", "advertiser title", "kunde"],
+      publisher_id: ["publisher_id", "publisher id"],
+      country: ["country", "land"],
+      subid: ["subid", "sub id"],
+      publisher_prename: ["publisher_prename", "publisher prename", "vorname", "publisher vorname"],
+      publisher_surname: ["publisher_surname", "publisher surname", "nachname", "publisher nachname"],
+      publisher_searchtitle: ["publisher_searchtitle", "publisher searchtitle", "publisher", "vollständiger name"],
+      order_timestamp: ["order_timestamp", "order timestamp", "timestamp"],
+      action_timestamp: ["action_timestamp", "action timestamp", "timestamp"],
+    };
+
+    const buildRowMaps = (row: string[]) => {
+      const byHeaderRaw: Record<string, string> = {};
+      const byHeaderNormalized: Record<string, string> = {};
+      header.forEach((h, i) => {
+        const rawHeader = String(h || "").trim();
+        if (!rawHeader) return;
+        const value = String(row?.[i] ?? "");
+        byHeaderRaw[rawHeader] = value;
+        const normalizedKey = normalizeHeader(rawHeader);
+        if (!(normalizedKey in byHeaderNormalized) || String(byHeaderNormalized[normalizedKey] || "").trim() === "") {
+          byHeaderNormalized[normalizedKey] = value;
+        }
+      });
+      return { byHeaderRaw, byHeaderNormalized };
+    };
+
+    const getByAliases = (normalizedMap: Record<string, string>, aliases: string[]) => {
+      for (const alias of aliases) {
+        const value = normalizedMap[normalizeHeader(alias)];
+        if (String(value ?? "").trim() !== "") return value;
+      }
+      return "";
+    };
+
+    const hasBusinessSignal = (normalizedMap: Record<string, string>) => {
+      const signalFields = [
+        getByAliases(normalizedMap, headerAliases.ordertoken || []),
+        getByAliases(normalizedMap, headerAliases.subid || []),
+        getByAliases(normalizedMap, headerAliases.timestamp || []),
+        getByAliases(normalizedMap, headerAliases.description || []),
+      ];
+      return signalFields.some((value) => String(value || "").trim() !== "");
+    };
+
     const { publisherUser, advertiserUser, effectiveCampaign } = resolvePartnerContext(file);
     const campaignId = effectiveCampaign?.id || validationCampaignId;
     const campaignName = effectiveCampaign?.name || "campaign";
 
-    const fallbackCfg = resolveCampaignFromText(campaignName) || null;
+    const fallbackCfg =
+      resolveCampaignFromText(campaignName) ||
+      Object.values(campaignConfigByKey).find((cfg) => cfg.id === String(campaignId || "")) ||
+      null;
     const derivedProjectId = publisherUser?.project_id ? String(publisherUser.project_id) : "";
     const derivedPublisherId = publisherUser?.publisher_id ? String(publisherUser.publisher_id) : "";
     const derivedTriggerId = advertiserUser?.trigger_id
@@ -604,6 +669,20 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     const derivedCommissionGroupId = advertiserUser?.commission_group_id
       ? String(advertiserUser.commission_group_id)
       : (fallbackCfg?.commissionGroupId || "");
+    const derivedAdvertiserId = fallbackCfg?.advertiserId || "";
+    const isNewEnergieExport =
+      derivedAdvertiserId === "167" ||
+      String(campaignId || "") === "260" ||
+      normalizePartnerKey(campaignName).includes("newenergie");
+
+    const splitName = (value?: string) => {
+      const cleaned = String(value || "").trim().replace(/\s+/g, " ");
+      if (!cleaned) return { first: "", last: "" };
+      const parts = cleaned.split(" ");
+      if (parts.length === 1) return { first: cleaned, last: "" };
+      return { first: parts[0], last: parts.slice(1).join(" ") };
+    };
+    const publisherNameParts = splitName(publisherUser?.name);
 
     const sanitize = (value: unknown) =>
       String(value ?? "")
@@ -632,34 +711,72 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       return cleaned;
     };
 
-    const buildRowMap = (row: string[]) => {
-      const map: Record<string, string> = {};
-      header.forEach((h, i) => {
-        map[String(h || "").trim()] = String(row?.[i] ?? "");
-      });
-      return map;
-    };
+    const rowsWithoutStatus = dataRows
+      .map(({ row, dataIndex }) => {
+        const { byHeaderRaw, byHeaderNormalized } = buildRowMaps(row);
+        return { row, dataIndex, byHeaderRaw, byHeaderNormalized };
+      })
+      .filter(({ row, dataIndex, byHeaderNormalized }) => {
+        const statusValueInSheet =
+          statusColIndex >= 0 ? String((row?.[statusColIndex] ?? "")).trim() : "";
+        const vRow = validationRows[dataIndex];
+        const statusCellFromCompare = vRow?.cells?.["Status in der uppr Performance Platform"];
+        const statusValueFromCompare =
+          statusCellFromCompare && typeof statusCellFromCompare === "object" && "value" in statusCellFromCompare
+            ? String(statusCellFromCompare.value ?? "").trim()
+            : "";
 
-    const dataRecords = rowsWithoutStatus.map(({ row, sourceIndex }) => {
-      const rowMap = buildRowMap(row);
-      const ordertoken = sanitize(rowMap["Ordertoken/OrderID"] || rowMap["Ordertoken/Order ID"]);
-      const timestamp = normalizeTimestamp(rowMap["Timestamp"] || "");
-      const publisherId = sanitize(rowMap["Publisher ID"]);
-      const subid = sanitize(rowMap["SubID"]);
-      const apiCommissionRaw = validationRows?.[sourceIndex]?.cells?.["Commission aus Netzwerk"]?.value;
-      const fallbackCommissionRaw = rowMap["Höhe der Provision (Optional)"] || "";
+        const hasStatusInSheet = statusValueInSheet !== "";
+        const hasStatusFromCompare = statusValueFromCompare !== "";
+        if (hasStatusInSheet || hasStatusFromCompare) return false;
+
+        // Verhindert Export von Meta-/Leerzeilen oberhalb/unterhalb der eigentlichen Daten.
+        return hasBusinessSignal(byHeaderNormalized);
+      });
+
+    if (rowsWithoutStatus.length === 0) {
+      toast({
+        title: "Keine offenen Transaktionen",
+        description: "Alle Transaktionen haben bereits einen Status.",
+      });
+      return;
+    }
+
+    const dataRecords = rowsWithoutStatus.map(({ byHeaderRaw, byHeaderNormalized, dataIndex }) => {
+      const getSourceValue = (field: string) => {
+        const fromAlias = getByAliases(byHeaderNormalized, headerAliases[field] || [field]);
+        if (String(fromAlias || "").trim() !== "") return fromAlias;
+        if (field === "ordertoken") {
+          // Some publisher templates put the order reference into "Sonstige Daten..."
+          // instead of the dedicated ordertoken column.
+          const sonstigeKey = Object.keys(byHeaderNormalized).find((key) => key.includes("sonstige daten"));
+          if (sonstigeKey) return byHeaderNormalized[sonstigeKey] || "";
+        }
+        return "";
+      };
+
+      const ordertoken = sanitize(getSourceValue("ordertoken"));
+      const timestamp = normalizeTimestamp(getSourceValue("timestamp"));
+      const publisherIdFromFile = sanitize(getSourceValue("publisher_id"));
+      const subid = sanitize(getSourceValue("subid"));
+      const apiCommissionRaw = validationRows?.[dataIndex]?.cells?.["Commission aus Netzwerk"]?.value;
+      const fallbackCommissionRaw = getSourceValue("commission");
       const commission = toNumberString(apiCommissionRaw || fallbackCommissionRaw);
-      const description = sanitize(rowMap["Grund der Anfrage"] || "");
+      const description = isNewEnergieExport ? "NBA" : sanitize(getSourceValue("description"));
 
       const record: Record<string, string> = {};
-      networkHeaders.forEach((h) => (record[h] = ""));
+      networkHeaders.forEach((h) => {
+        const source = getSourceValue(h);
+        record[h] = sanitize(source);
+      });
 
       record.id = "";
       record.status = "0";
       record.timestamp = timestamp;
       record.campaign_id = campaignId;
       record.ordertoken = ordertoken;
-      record.project_id = derivedProjectId;
+      // Enforce canonical partner project_id to avoid stale values from source files.
+      record.project_id = sanitize(derivedProjectId || record.project_id);
       record.trigger_id = derivedTriggerId;
       record.commission_group_id = derivedCommissionGroupId;
       record.description = description;
@@ -669,10 +786,21 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       record.source_commission = commission;
       record.order_currency = "EUR";
       record.campaign_title = campaignName;
-      record.advertiser_title = advertiserUser?.company || campaignName;
-      record.publisher_id = derivedPublisherId || publisherId;
+      record.advertiser_id = sanitize(record.advertiser_id || derivedAdvertiserId);
+      record.advertiser_title = sanitize(record.advertiser_title || advertiserUser?.company || campaignName);
+      record.publisher_id = sanitize(record.publisher_id || derivedPublisherId || publisherIdFromFile);
+      record.publisher_prename = sanitize(record.publisher_prename || publisherNameParts.first);
+      record.publisher_surname = sanitize(record.publisher_surname || publisherNameParts.last);
+      record.publisher_searchtitle = sanitize(record.publisher_searchtitle || publisherUser?.name || "");
+      record.project_title = sanitize(record.project_title || advertiserUser?.company || campaignName);
+      record.source_project_title = sanitize(record.source_project_title || advertiserUser?.company || campaignName);
       record.subid = subid;
-      record.country = "DE";
+      record.country = sanitize(record.country || "DE");
+
+      // Rohzeile für Nachvollziehbarkeit in proprietäres Feld (falls vorhanden) spiegeln.
+      if (!record.vc) {
+        record.vc = sanitize(JSON.stringify(byHeaderRaw));
+      }
 
       return Object.fromEntries(
         networkHeaders.map((h) => [h, sanitize(record[h])])
@@ -694,9 +822,13 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       });
     } catch (err) {
       console.error("❌ exportBookingCsv error", err);
+      const detail =
+        (err as { response?: { data?: { detail?: string; error?: string } } })?.response?.data?.detail ||
+        (err as { response?: { data?: { detail?: string; error?: string } } })?.response?.data?.error ||
+        "Die Nachbuchungen konnten nicht gespeichert/exportiert werden.";
       toast({
         title: "CSV Export fehlgeschlagen",
-        description: "Die Nachbuchungen konnten nicht gespeichert/exportiert werden.",
+        description: detail,
         variant: "destructive",
       });
       return;

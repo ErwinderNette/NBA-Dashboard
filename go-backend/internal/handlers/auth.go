@@ -1,13 +1,12 @@
 package handlers
 
 import (
-	"fmt"
+	"errors"
+	"log"
 	"nba-dashboard/internal/models"
 	"os"
 	"strings"
 	"time"
-
-	"log"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
@@ -68,9 +67,9 @@ func createJWT(user models.User) (string, error) {
 		"role":  user.Role,
 		"exp":   time.Now().Add(24 * time.Hour).Unix(),
 	}
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		secret = "devsecret" // Fallback für Entwicklung
+	secret, err := getJWTSecret()
+	if err != nil {
+		return "", err
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(secret))
@@ -78,6 +77,12 @@ func createJWT(user models.User) (string, error) {
 
 // AddInitialUsers legt Default-User an und synchronisiert Partner-Metadaten.
 func AddInitialUsers(db *gorm.DB) {
+	if !isEnvTrue("SEED_DEFAULT_USERS") {
+		log.Println("ℹ️ SEED_DEFAULT_USERS disabled; skipping default user seeding")
+		return
+	}
+	syncExisting := isEnvTrue("SEED_SYNC_EXISTING_USERS")
+
 	users := []models.User{
 		{
 			Name:         "Admin",
@@ -87,20 +92,20 @@ func AddInitialUsers(db *gorm.DB) {
 			Company:      "",
 		},
 		{
-			Name:         "NEW Energie",
-			Email:        "newenergie@advertiser.de",
-			Role:         "advertiser",
-			PasswordHash: hashOrPanic("4321"),
-			Company:      "NEW Energie",
+			Name:              "NEW Energie",
+			Email:             "newenergie@advertiser.de",
+			Role:              "advertiser",
+			PasswordHash:      hashOrPanic("4321"),
+			Company:           "NEW Energie",
 			CommissionGroupID: 912,
 			TriggerID:         6,
 		},
 		{
-			Name:         "eprimo",
-			Email:        "eprimo@advertiser.de",
-			Role:         "advertiser",
-			PasswordHash: hashOrPanic("4321"),
-			Company:      "eprimo",
+			Name:              "eprimo",
+			Email:             "eprimo@advertiser.de",
+			Role:              "advertiser",
+			PasswordHash:      hashOrPanic("4321"),
+			Company:           "eprimo",
 			CommissionGroupID: 394,
 			TriggerID:         1,
 		},
@@ -119,7 +124,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Role:         "publisher",
 			PasswordHash: hashOrPanic("1234"),
 			Company:      "Tellja",
-			ProjectID:    5241536,
+			ProjectID:    5241563,
 			PublisherID:  1317,
 		},
 		{
@@ -135,7 +140,7 @@ func AddInitialUsers(db *gorm.DB) {
 		var existing models.User
 		// Prüfe zuerst, ob der Benutzer bereits existiert
 		result := db.Where("email = ?", u.Email).First(&existing)
-		
+
 		if result.Error != nil {
 			// Benutzer existiert nicht, erstelle ihn
 			if result.Error == gorm.ErrRecordNotFound {
@@ -150,7 +155,7 @@ func AddInitialUsers(db *gorm.DB) {
 			} else {
 				log.Printf("Fehler beim Prüfen von User %s: %v", u.Email, result.Error)
 			}
-		} else {
+		} else if syncExisting {
 			// Bestehende User mit Seed-Daten synchronisieren (wichtig für neue Partner-IDs).
 			existing.Name = u.Name
 			existing.Role = u.Role
@@ -165,6 +170,54 @@ func AddInitialUsers(db *gorm.DB) {
 			}
 		}
 	}
+
+	// Always backfill critical partner metadata for existing seed users.
+	// This keeps canonical IDs consistent even when full syncExisting is disabled.
+	backfillSeedPartnerMetadata(db)
+}
+
+func backfillSeedPartnerMetadata(db *gorm.DB) {
+	type partnerMetadata struct {
+		Email       string
+		ProjectID   uint
+		PublisherID uint
+	}
+
+	targets := []partnerMetadata{
+		{
+			Email:       "tellja@publisher.de",
+			ProjectID:   5241563,
+			PublisherID: 1317,
+		},
+	}
+
+	for _, target := range targets {
+		var user models.User
+		if err := db.Where("email = ?", target.Email).First(&user).Error; err != nil {
+			if err != gorm.ErrRecordNotFound {
+				log.Printf("Fehler beim Laden der Partner-Metadaten für %s: %v", target.Email, err)
+			}
+			continue
+		}
+
+		changed := false
+		if target.ProjectID != 0 && user.ProjectID != target.ProjectID {
+			user.ProjectID = target.ProjectID
+			changed = true
+		}
+		if target.PublisherID != 0 && user.PublisherID != target.PublisherID {
+			user.PublisherID = target.PublisherID
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		if err := db.Save(&user).Error; err != nil {
+			log.Printf("Fehler beim Backfill der Partner-Metadaten für %s: %v", target.Email, err)
+			continue
+		}
+		log.Printf("✓ Partner-Metadaten korrigiert: %s (project_id=%d, publisher_id=%d)", target.Email, user.ProjectID, user.PublisherID)
+	}
 }
 
 // isDuplicateKeyError prüft, ob es sich um einen "duplicate key" Fehler handelt
@@ -173,9 +226,9 @@ func isDuplicateKeyError(err error) bool {
 		return false
 	}
 	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "duplicate key") || 
-		   strings.Contains(errStr, "23505") || 
-		   strings.Contains(errStr, "unique constraint")
+	return strings.Contains(errStr, "duplicate key") ||
+		strings.Contains(errStr, "23505") ||
+		strings.Contains(errStr, "unique constraint")
 }
 
 func hashOrPanic(pw string) string {
@@ -186,6 +239,19 @@ func hashOrPanic(pw string) string {
 	return string(hash)
 }
 
+func getJWTSecret() (string, error) {
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret == "" {
+		return "", errors.New("JWT_SECRET is not configured")
+	}
+	return secret, nil
+}
+
+func isEnvTrue(key string) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
 // AuthRequired ist eine Fiber-Middleware, die das JWT prüft
 func AuthRequired() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -194,9 +260,9 @@ func AuthRequired() fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Missing or invalid token"})
 		}
 		tokenStr := header[7:]
-		secret := os.Getenv("JWT_SECRET")
-		if secret == "" {
-			secret = "devsecret"
+		secret, err := getJWTSecret()
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Auth service misconfigured"})
 		}
 		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -213,7 +279,6 @@ func AuthRequired() fiber.Handler {
 		if !ok {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 		}
-		fmt.Printf("Token Claims: %#v\n", claims)
 		c.Locals("user", claims)
 		return c.Next()
 	}

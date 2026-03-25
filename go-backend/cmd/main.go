@@ -1,10 +1,22 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log"
+	"mime"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"nba-dashboard/internal/config"
@@ -17,32 +29,20 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 )
 
 var db *gorm.DB
 
-// UploadAccess Modell (inline für Demo, besser: in models/upload_access.go)
-type UploadAccess struct {
-	ID           uint `gorm:"primaryKey"`
-	UploadID     uint `gorm:"not null"`
-	AdvertiserID uint `gorm:"not null"`
-	ExpiresAt    *time.Time
-	CreatedAt    time.Time `gorm:"autoCreateTime"`
-}
-
-// Migration ergänzen (in main oder config/db.go)
-func init() {
-	if db != nil {
-		db.AutoMigrate(&UploadAccess{})
-	}
-}
-
 func main() {
 	// .env laden
 	godotenv.Load(".env")
+	validateSecurityConfig()
 
 	// Create uploads directory if it doesn't exist
 	uploadsDir := "uploads"
@@ -50,11 +50,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Init DB (führt auch Migration aus)
+	// Init DB
 	db = config.InitDB()
-
-	// Migration für UploadAccess nachholen
-	db.AutoMigrate(&UploadAccess{})
+	if shouldRunAutoMigrate() {
+		if err := config.RunAutoMigrate(db); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	// Lege Default-User an
 	handlers.AddInitialUsers(db)
@@ -63,22 +65,34 @@ func main() {
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
-		BodyLimit: 10 * 1024 * 1024, // 10MB limit
+		BodyLimit:    10 * 1024 * 1024, // 10MB limit
+		ErrorHandler: customErrorHandler,
 	})
 
 	// Middleware
-	app.Use(logger.New())
-
-	// CORS-Konfiguration: Erlaube alle Origins für Entwicklung
-	// In Produktion sollte dies auf spezifische Domains beschränkt werden
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*", // Für Entwicklung: erlaube alle Origins
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
-		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-		AllowCredentials: false, // Bei "*" muss AllowCredentials false sein
-		ExposeHeaders:    "",
-		MaxAge:           0, // Preflight-Cache deaktiviert für Entwicklung
+	app.Use(requestid.New())
+	app.Use(recover.New(recover.Config{
+		EnableStackTrace: !isProductionEnv(),
 	}))
+	app.Use(logger.New(loggerConfigFromEnv()))
+	app.Use(securityHeadersMiddleware())
+	app.Use(rateLimitMiddleware())
+	app.Use(cors.New(corsConfigFromEnv()))
+
+	// Health endpoints for orchestrators and load balancers.
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ok"})
+	})
+	app.Get("/ready", func(c *fiber.Ctx) error {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "not_ready"})
+		}
+		if err := sqlDB.Ping(); err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"status": "not_ready"})
+		}
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{"status": "ready"})
+	})
 
 	// Routes
 	app.Post("/api/upload", handlers.AuthRequired(), handleFileUpload)
@@ -113,8 +127,22 @@ func main() {
 	// Login-Endpoint
 	app.Post("/api/login", handlers.HandleLogin(db))
 
-	// Start server
-	log.Fatal(app.Listen(":3001"))
+	serverAddr := ":" + envWithDefault("PORT", "3001")
+	go func() {
+		if err := app.Listen(serverAddr); err != nil {
+			log.Fatalf("server stopped with error: %v", err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+	}
 }
 
 func handleFileUpload(c *fiber.Ctx) error {
@@ -136,8 +164,13 @@ func handleFileUpload(c *fiber.Ctx) error {
 			"error": "No file uploaded",
 		})
 	}
+	if err := validateUploadFile(file); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
 
-	filename := filepath.Join("uploads", file.Filename)
+	filename := buildStoredUploadPath(file.Filename)
 	if err := c.SaveFile(file, filename); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "Failed to save file",
@@ -196,7 +229,7 @@ func handleGetUploads(c *fiber.Ctx) error {
 		var accessUploads []models.Upload
 
 		if err2 == nil {
-			var accesses []UploadAccess
+			var accesses []models.UploadAccess
 			db.Where("advertiser_id = ?", user.ID).Find(&accesses)
 
 			var uploadIDs []uint
@@ -231,7 +264,7 @@ func handleGetUploads(c *fiber.Ctx) error {
 	}
 
 	// Mapping: UploadID -> AdvertiserID (nur letzter Eintrag zählt)
-	var accesses []UploadAccess
+	var accesses []models.UploadAccess
 	db.Find(&accesses)
 	m := map[uint]uint{}
 	for _, a := range accesses {
@@ -335,7 +368,7 @@ func handleGrantAccessDB(c *fiber.Ctx) error {
 	}
 
 	uploadID := id
-	access := UploadAccess{
+	access := models.UploadAccess{
 		UploadID:     parseUint(uploadID),
 		AdvertiserID: body.AdvertiserId,
 		ExpiresAt:    body.ExpiresAt,
@@ -385,7 +418,7 @@ func handleDownloadFile(c *fiber.Ctx) error {
 			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
 			}
-			var access UploadAccess
+			var access models.UploadAccess
 			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
 			}
@@ -502,7 +535,7 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
 			}
-			var access UploadAccess
+			var access models.UploadAccess
 			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
 			}
@@ -515,10 +548,13 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "No file uploaded"})
 	}
+	if err := validateUploadFile(file); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
 
 	_ = os.Remove(upload.FilePath)
 
-	filename := filepath.Join("uploads", file.Filename)
+	filename := buildStoredUploadPath(file.Filename)
 	if err := c.SaveFile(file, filename); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save file"})
 	}
@@ -568,7 +604,7 @@ func handleGetFileContent(c *fiber.Ctx) error {
 				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
-				var access UploadAccess
+				var access models.UploadAccess
 				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
@@ -619,7 +655,7 @@ func handleSaveFileContent(c *fiber.Ctx) error {
 				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
-				var access UploadAccess
+				var access models.UploadAccess
 				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
@@ -651,4 +687,314 @@ func handleSaveFileContent(c *fiber.Ctx) error {
 	db.Save(&upload)
 
 	return c.JSON(fiber.Map{"message": "File saved successfully"})
+}
+
+func validateSecurityConfig() {
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if appEnv == "production" && jwtSecret == "" {
+		log.Fatal("JWT_SECRET must be set when APP_ENV=production")
+	}
+}
+
+func isProductionEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
+}
+
+func shouldRunAutoMigrate() bool {
+	override := strings.TrimSpace(strings.ToLower(os.Getenv("DB_AUTO_MIGRATE")))
+	if override != "" {
+		return override == "1" || override == "true" || override == "yes" || override == "on"
+	}
+	// Safe default: in production migrations are disabled unless explicitly enabled.
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
+}
+
+func customErrorHandler(c *fiber.Ctx, err error) error {
+	status := fiber.StatusInternalServerError
+	message := "Internal server error"
+
+	var fiberErr *fiber.Error
+	if errors.As(err, &fiberErr) {
+		status = fiberErr.Code
+		message = fiberErr.Message
+	}
+
+	requestID := strings.TrimSpace(c.GetRespHeader(fiber.HeaderXRequestID))
+	if requestID == "" {
+		if value, ok := c.Locals("requestid").(string); ok {
+			requestID = strings.TrimSpace(value)
+		}
+	}
+
+	return c.Status(status).JSON(fiber.Map{
+		"error":      message,
+		"request_id": requestID,
+	})
+}
+
+func loggerConfigFromEnv() logger.Config {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("LOG_FORMAT")), "text") {
+		return logger.Config{
+			Format:     "[${time}] ${status} - ${method} ${path} (${latency}) rid=${locals:requestid}\n",
+			TimeFormat: time.RFC3339,
+		}
+	}
+
+	return logger.Config{
+		Format:     "{\"time\":\"${time}\",\"level\":\"info\",\"request_id\":\"${locals:requestid}\",\"status\":${status},\"latency\":\"${latency}\",\"method\":\"${method}\",\"path\":\"${path}\",\"ip\":\"${ip}\",\"user_agent\":\"${ua}\",\"error\":\"${error}\"}\n",
+		TimeFormat: time.RFC3339Nano,
+	}
+}
+
+func securityHeadersMiddleware() fiber.Handler {
+	if !isFeatureEnabled("SECURITY_HEADERS_ENABLED", true) {
+		return func(c *fiber.Ctx) error { return c.Next() }
+	}
+
+	csp := strings.TrimSpace(os.Getenv("SECURITY_CSP"))
+	if csp == "" {
+		csp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none';"
+	}
+
+	return func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("X-Frame-Options", "DENY")
+		c.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Set("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+		c.Set("Content-Security-Policy", csp)
+
+		if isProductionEnv() {
+			c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		return c.Next()
+	}
+}
+
+func rateLimitMiddleware() fiber.Handler {
+	if !isFeatureEnabled("RATE_LIMIT_ENABLED", false) {
+		return func(c *fiber.Ctx) error { return c.Next() }
+	}
+
+	max := envIntWithDefault("RATE_LIMIT_MAX", 120)
+	windowSeconds := envIntWithDefault("RATE_LIMIT_WINDOW_SECONDS", 60)
+	if max <= 0 {
+		max = 120
+	}
+	if windowSeconds <= 0 {
+		windowSeconds = 60
+	}
+
+	return limiter.New(limiter.Config{
+		Max:        max,
+		Expiration: time.Duration(windowSeconds) * time.Second,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return c.IP()
+		},
+		Next: func(c *fiber.Ctx) bool {
+			path := strings.TrimSpace(c.Path())
+			if path == "/health" || path == "/ready" {
+				return true
+			}
+			return !strings.HasPrefix(path, "/api")
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			requestID := strings.TrimSpace(c.GetRespHeader(fiber.HeaderXRequestID))
+			if requestID == "" {
+				if value, ok := c.Locals("requestid").(string); ok {
+					requestID = strings.TrimSpace(value)
+				}
+			}
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error":      "Rate limit exceeded",
+				"request_id": requestID,
+			})
+		},
+	})
+}
+
+func corsConfigFromEnv() cors.Config {
+	allowOrigins := strings.TrimSpace(os.Getenv("CORS_ALLOW_ORIGINS"))
+	base := cors.Config{
+		AllowOrigins:     allowOrigins,
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowMethods:     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+		AllowCredentials: false,
+		MaxAge:           300,
+	}
+
+	if isProductionEnv() {
+		if allowOrigins == "" {
+			log.Fatal("CORS_ALLOW_ORIGINS must be configured when APP_ENV=production")
+		}
+		return base
+	}
+
+	// Development defaults and LAN-friendly behavior.
+	// In development we deliberately allow dynamic LAN origins to avoid repeated
+	// CORS breakage when local IPs change.
+	base.AllowOrigins = "*"
+	return base
+}
+
+func envWithDefault(key string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func envIntWithDefault(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func isFeatureEnabled(key string, defaultValue bool) bool {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if raw == "" {
+		return defaultValue
+	}
+	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func buildStoredUploadPath(originalFilename string) string {
+	base := filepath.Base(strings.TrimSpace(originalFilename))
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	name = regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(name, "-")
+	name = strings.Trim(name, "-.")
+	if name == "" {
+		name = "upload"
+	}
+
+	stored := fmt.Sprintf("%s_%d%s", name, time.Now().UnixNano(), ext)
+	return filepath.Join("uploads", stored)
+}
+
+func validateUploadFile(file *multipart.FileHeader) error {
+	if file == nil {
+		return errors.New("no file uploaded")
+	}
+
+	maxBytes := uploadMaxBytes()
+	if file.Size <= 0 {
+		return errors.New("uploaded file is empty")
+	}
+	if file.Size > maxBytes {
+		return fmt.Errorf("file too large (max %d bytes)", maxBytes)
+	}
+
+	filename := strings.TrimSpace(file.Filename)
+	ext := strings.ToLower(filepath.Ext(filename))
+	allowedExtensions := allowedUploadExtensions()
+	if !slices.Contains(allowedExtensions, ext) {
+		return fmt.Errorf("file extension %q is not allowed", ext)
+	}
+
+	contentType, err := detectContentType(file)
+	if err != nil {
+		return fmt.Errorf("failed to inspect file content: %w", err)
+	}
+
+	allowedMIMEs := allowedUploadMIMEs()
+	if contentType != "" && !slices.Contains(allowedMIMEs, contentType) {
+		return fmt.Errorf("file content type %q is not allowed", contentType)
+	}
+	return nil
+}
+
+func detectContentType(file *multipart.FileHeader) (string, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+
+	buf := make([]byte, 512)
+	n, readErr := reader.Read(buf)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return "", readErr
+	}
+	if n == 0 {
+		return "", nil
+	}
+
+	detected := strings.ToLower(strings.TrimSpace(http.DetectContentType(buf[:n])))
+	if detected == "" {
+		return "", nil
+	}
+
+	// Normalize common values with charset so env matching is deterministic.
+	mediaType, _, err := mime.ParseMediaType(detected)
+	if err == nil && mediaType != "" {
+		return strings.ToLower(strings.TrimSpace(mediaType)), nil
+	}
+	return detected, nil
+}
+
+func allowedUploadExtensions() []string {
+	raw := strings.TrimSpace(os.Getenv("UPLOAD_ALLOWED_EXTENSIONS"))
+	if raw == "" {
+		raw = ".csv,.xlsx,.xls"
+	}
+	out := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		val := strings.ToLower(strings.TrimSpace(part))
+		if val == "" {
+			continue
+		}
+		if !strings.HasPrefix(val, ".") {
+			val = "." + val
+		}
+		if !slices.Contains(out, val) {
+			out = append(out, val)
+		}
+	}
+	return out
+}
+
+func allowedUploadMIMEs() []string {
+	raw := strings.TrimSpace(os.Getenv("UPLOAD_ALLOWED_MIME_TYPES"))
+	if raw == "" {
+		raw = strings.Join([]string{
+			"text/csv",
+			"text/plain",
+			"application/csv",
+			"application/vnd.ms-excel",
+			"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+			"application/octet-stream",
+			"application/zip",
+		}, ",")
+	}
+	out := make([]string, 0, 8)
+	for _, part := range strings.Split(raw, ",") {
+		val := strings.ToLower(strings.TrimSpace(part))
+		if val == "" {
+			continue
+		}
+		if !slices.Contains(out, val) {
+			out = append(out, val)
+		}
+	}
+	return out
+}
+
+func uploadMaxBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("UPLOAD_MAX_BYTES"))
+	if raw == "" {
+		return 10 * 1024 * 1024
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 10 * 1024 * 1024
+	}
+	return value
 }
