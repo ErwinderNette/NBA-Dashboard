@@ -1,11 +1,12 @@
 import Header from "@/components/Header";
 import AdminFileList from "@/components/AdminFileList";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { uploadService } from "@/services/uploadService";
 import { advertiserService } from "@/services/advertiserService";
 import { UploadItem, Advertiser } from "@/types/upload";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 
 const AdminDashboard = () => {
   const { toast } = useToast();
@@ -30,10 +31,10 @@ const AdminDashboard = () => {
         setUploads(uploadsData);
         setAdvertisers(advertisersData);
       } catch (err) {
-        setError('Failed to load data. Please try again later.');
+        setError("Daten konnten nicht geladen werden. Bitte versuche es erneut.");
         toast({
-          title: "Error",
-          description: "Failed to load data. Please try again later.",
+          title: "Fehler",
+          description: "Daten konnten nicht geladen werden. Bitte versuche es erneut.",
           variant: "destructive",
         });
       } finally {
@@ -63,17 +64,26 @@ const AdminDashboard = () => {
       );
 
       toast({
-        title: "Success",
-        description: "Access granted successfully",
+        title: "Erfolg",
+        description: "Zugriff wurde erfolgreich vergeben.",
       });
     } catch (err) {
       toast({
-        title: "Error",
-        description: "Failed to grant access. Please try again.",
+        title: "Fehler",
+        description: "Zugriff konnte nicht vergeben werden. Bitte erneut versuchen.",
         variant: "destructive",
       });
     }
   };
+
+  const kpis = useMemo(() => {
+    const open = uploads.filter((u) => u.status !== "completed").length;
+    const assigned = uploads.filter((u) => u.status === "assigned" || u.status === "granted").length;
+    const completed = uploads.filter((u) => u.status === "completed").length;
+    const lastSevenDays = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const trend = uploads.filter((u) => new Date(u.upload_date).getTime() >= lastSevenDays).length;
+    return { open, assigned, completed, trend };
+  }, [uploads]);
 
   if (isLoading) {
     return (
@@ -98,10 +108,35 @@ const AdminDashboard = () => {
     <div className="min-h-screen" style={{ background: 'linear-gradient(to bottom right, #6B7280, #4B5563)' }}>
       <Header />
       <div className="container mx-auto px-4 py-8 space-y-8">
+        <section className="grid gap-3 md:grid-cols-4">
+          <Card className="ui-hover-lift">
+            <CardContent className="p-4">
+              <p className="text-xs uppercase text-slate-500">Offen</p>
+              <p className="text-2xl font-semibold">{kpis.open}</p>
+            </CardContent>
+          </Card>
+          <Card className="ui-hover-lift">
+            <CardContent className="p-4">
+              <p className="text-xs uppercase text-slate-500">Zugewiesen</p>
+              <p className="text-2xl font-semibold">{kpis.assigned}</p>
+            </CardContent>
+          </Card>
+          <Card className="ui-hover-lift">
+            <CardContent className="p-4">
+              <p className="text-xs uppercase text-slate-500">Abgeschlossen</p>
+              <p className="text-2xl font-semibold">{kpis.completed}</p>
+            </CardContent>
+          </Card>
+          <Card className="ui-hover-lift">
+            <CardContent className="p-4">
+              <p className="text-xs uppercase text-slate-500">Trend (7 Tage)</p>
+              <p className="text-2xl font-semibold">+{kpis.trend}</p>
+            </CardContent>
+          </Card>
+        </section>
         <AdminFileList 
-          uploads={uploads}
           advertisers={advertisers}
-          onGrantAccess={handleGrantAccess}s
+          onGrantAccess={handleGrantAccess}
         />
       </div>
     </div>

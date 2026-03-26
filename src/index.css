@@ -33,6 +33,10 @@
     --ring: 222.2 84% 4.9%;
 
     --radius: 0.5rem;
+    --ui-focus-ring: 0 0 0 3px rgba(0, 159, 227, 0.2);
+    --ui-hover-lift: translateY(-2px);
+    --ui-transition-fast: 180ms;
+    --ui-disabled-opacity: 0.65;
 
     --sidebar-background: 0 0% 98%;
 
@@ -97,5 +101,48 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer base {
+  button,
+  input,
+  textarea,
+  [role="button"],
+  [data-radix-collection-item] {
+    transition: all var(--ui-transition-fast) ease;
+  }
+
+  input:focus-visible,
+  textarea:focus-visible,
+  button:focus-visible {
+    outline: none;
+    box-shadow: var(--ui-focus-ring);
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: var(--ui-disabled-opacity);
+  }
+}
+
+@layer utilities {
+  .ui-hover-lift:hover {
+    transform: var(--ui-hover-lift);
+  }
+
+  .empty-state-card {
+    @apply rounded-xl border border-dashed border-slate-300 bg-white/80 p-6 text-center text-slate-600;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

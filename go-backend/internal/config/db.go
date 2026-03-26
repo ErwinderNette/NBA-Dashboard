@@ -43,6 +43,7 @@ func InitDB() *gorm.DB {
 func RunAutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&models.User{},
+		&models.PasswordResetToken{},
 		&models.Upload{},
 		&models.UploadAccess{},
 		&models.ValidationResult{},

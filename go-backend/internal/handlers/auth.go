@@ -22,10 +22,12 @@ type LoginRequest struct {
 
 // LoginResponse ist die Antwort mit JWT
 type LoginResponse struct {
-	Token string `json:"token"`
-	Role  string `json:"role"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
+	Token               string `json:"token"`
+	Role                string `json:"role"`
+	Name                string `json:"name"`
+	Email               string `json:"email"`
+	MustCompleteProfile bool   `json:"must_complete_profile"`
+	AvatarURL           string `json:"avatar_url,omitempty"`
 }
 
 // HandleLogin verarbeitet den Login-Request
@@ -51,10 +53,12 @@ func HandleLogin(db *gorm.DB) fiber.Handler {
 		}
 
 		return c.JSON(LoginResponse{
-			Token: token,
-			Role:  user.Role,
-			Name:  user.Name,
-			Email: user.Email,
+			Token:               token,
+			Role:                user.Role,
+			Name:                user.Name,
+			Email:               user.Email,
+			MustCompleteProfile: user.MustCompleteProfile,
+			AvatarURL:           avatarURLForUser(user),
 		})
 	}
 }
@@ -85,17 +89,21 @@ func AddInitialUsers(db *gorm.DB) {
 
 	users := []models.User{
 		{
-			Name:         "Admin",
-			Email:        "admin@mail.de",
-			Role:         "admin",
-			PasswordHash: hashOrPanic("admin"),
-			Company:      "",
+			Name:          "Admin",
+			Email:         "admin@mail.de",
+			Role:          "admin",
+			PasswordHash:  hashOrPanic("admin"),
+			AuthProvider:  "local",
+			EmailVerified: true,
+			Company:       "",
 		},
 		{
 			Name:              "NEW Energie",
 			Email:             "newenergie@advertiser.de",
 			Role:              "advertiser",
 			PasswordHash:      hashOrPanic("4321"),
+			AuthProvider:      "local",
+			EmailVerified:     true,
 			Company:           "NEW Energie",
 			CommissionGroupID: 912,
 			TriggerID:         6,
@@ -105,35 +113,43 @@ func AddInitialUsers(db *gorm.DB) {
 			Email:             "eprimo@advertiser.de",
 			Role:              "advertiser",
 			PasswordHash:      hashOrPanic("4321"),
+			AuthProvider:      "local",
+			EmailVerified:     true,
 			Company:           "eprimo",
 			CommissionGroupID: 394,
 			TriggerID:         1,
 		},
 		{
-			Name:         "Shoop",
-			Email:        "shoop@publisher.de",
-			Role:         "publisher",
-			PasswordHash: hashOrPanic("1234"),
-			Company:      "Shoop",
-			ProjectID:    50008,
-			PublisherID:  1008,
+			Name:          "Shoop",
+			Email:         "shoop@publisher.de",
+			Role:          "publisher",
+			PasswordHash:  hashOrPanic("1234"),
+			AuthProvider:  "local",
+			EmailVerified: true,
+			Company:       "Shoop",
+			ProjectID:     50008,
+			PublisherID:   1008,
 		},
 		{
-			Name:         "Tellja",
-			Email:        "tellja@publisher.de",
-			Role:         "publisher",
-			PasswordHash: hashOrPanic("1234"),
-			Company:      "Tellja",
-			ProjectID:    5241563,
-			PublisherID:  1317,
+			Name:          "Tellja",
+			Email:         "tellja@publisher.de",
+			Role:          "publisher",
+			PasswordHash:  hashOrPanic("1234"),
+			AuthProvider:  "local",
+			EmailVerified: true,
+			Company:       "Tellja",
+			ProjectID:     5241563,
+			PublisherID:   1317,
 		},
 		{
 			// Legacy-Publisher bleibt für Rückwärtskompatibilität bestehen.
-			Name:         "Publisher",
-			Email:        "publisher@email.de",
-			Role:         "publisher",
-			PasswordHash: hashOrPanic("1234"),
-			Company:      "",
+			Name:          "Publisher",
+			Email:         "publisher@email.de",
+			Role:          "publisher",
+			PasswordHash:  hashOrPanic("1234"),
+			AuthProvider:  "local",
+			EmailVerified: true,
+			Company:       "",
 		},
 	}
 	for _, u := range users {
@@ -161,6 +177,8 @@ func AddInitialUsers(db *gorm.DB) {
 			existing.Role = u.Role
 			existing.Company = u.Company
 			existing.PasswordHash = u.PasswordHash
+			existing.AuthProvider = u.AuthProvider
+			existing.EmailVerified = u.EmailVerified
 			existing.ProjectID = u.ProjectID
 			existing.PublisherID = u.PublisherID
 			existing.CommissionGroupID = u.CommissionGroupID

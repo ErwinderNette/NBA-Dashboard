@@ -253,7 +253,14 @@ const FileList = ({ files, onDelete, onComplete }: FileListProps) => {
             <div>Aktionen</div> {/* NEU */}
           </div>
           {/* File rows */}
-          {(files ?? []).length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
+          {(files ?? []).length === 0 && (
+            <div className="empty-state-card">
+              <p>Hier sind aktuell keine Dateien sichtbar.</p>
+              <p className="mt-1 text-sm text-slate-500">
+                Lade eine neue Datei hoch oder passe deine Filter im Dashboard an.
+              </p>
+            </div>
+          )}
           {(files ?? []).map((file, index) => (
             <div
               key={index}

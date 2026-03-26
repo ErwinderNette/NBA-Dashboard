@@ -51,6 +51,7 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const [isSelecting, setIsSelecting] = useState<Record<number, { startRow: number, startCol: number } | null>>({});
 
   useEffect(() => {
+    const userRole = localStorage.getItem("userRole");
     // ✅ Lade zuerst Validierungen aus localStorage (sofort verfügbar, auch nach Reload)
     const storedValidations = validationStorage.loadAll();
     if (Object.keys(storedValidations).length > 0) {
@@ -60,6 +61,9 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     
     // ✅ Lade auch aus der DB (als Backup/Sync)
     const loadAllValidations = async () => {
+      if (userRole !== "admin") {
+        return;
+      }
       try {
         const validations = await uploadService.getAllValidations();
         const convertedValidations: Record<number, any> = {};
@@ -574,10 +578,10 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   };
 
   if (isLoading) {
-    return <div>Lade Dateien...</div>;
+    return <div className="empty-state-card">Dateien werden geladen...</div>;
   }
   if (error) {
-    return <div>{error}</div>;
+    return <div className="empty-state-card">{error}</div>;
   }
 
   return (
@@ -594,7 +598,14 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
           <div className="col-span-1">Download</div>
         </div>
         {/* File rows */}
-        {(uploads ?? []).length === 0 && <div className="py-4 text-gray-500">Keine Dateien gefunden.</div>}
+        {(uploads ?? []).length === 0 && (
+          <div className="empty-state-card">
+            <p>Derzeit liegen keine offenen Dateien fuer dich vor.</p>
+            <p className="mt-1 text-sm text-slate-500">
+              Sobald ein Publisher etwas zuweist, erscheint es automatisch hier.
+            </p>
+          </div>
+        )}
         {(uploads ?? []).map((file) => (
           <div key={file.id}>
             <div className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">

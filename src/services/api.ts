@@ -24,7 +24,16 @@ api.interceptors.response.use(
     // Handle common errors here
     if (error.response?.status === 401) {
       // Handle unauthorized access
+      localStorage.removeItem('isLoggedIn');
+      localStorage.removeItem('userRole');
+      localStorage.removeItem('userEmail');
+      localStorage.removeItem('userName');
       localStorage.removeItem('auth_token');
+      localStorage.removeItem('userMustCompleteProfile');
+      localStorage.removeItem('userAvatarUrl');
+      localStorage.removeItem('userAvatarUpdatedAt');
+      localStorage.removeItem('userLastLoginAt');
+      localStorage.removeItem('userLastAction');
       window.location.href = '/login';
     }
     return Promise.reject(error);

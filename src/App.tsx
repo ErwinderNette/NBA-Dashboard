@@ -4,10 +4,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Suspense, lazy } from "react";
+import "./App.css";
 
 // Lazy load components
 const Login = lazy(() => import("./pages/Login"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const CompleteProfile = lazy(() => import("./pages/CompleteProfile"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Settings = lazy(() => import("./pages/Settings"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const ProtectedRoute = lazy(() => import("./components/ProtectedRoute"));
 const AdvertiserDashboard = lazy(() => import("./pages/AdvertiserDashboard"));
@@ -33,6 +38,7 @@ const queryClient = new QueryClient({
 const App = () => {
   const isLoggedIn = localStorage.getItem("isLoggedIn") === "true";
   const userRole = localStorage.getItem("userRole");
+  const mustCompleteProfile = localStorage.getItem("userMustCompleteProfile") === "true";
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -46,6 +52,8 @@ const App = () => {
                 path="/" 
                 element={
                   isLoggedIn ? (
+                    mustCompleteProfile ?
+                      <Navigate to="/complete-profile" replace /> :
                     userRole === "advertiser" ? 
                       <Navigate to="/advertiser-dashboard" replace /> : 
                     userRole === "admin" ?
@@ -55,10 +63,20 @@ const App = () => {
                 } 
               />
               <Route path="/login" element={<Login />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
+              <Route
+                path="/complete-profile"
+                element={
+                  <ProtectedRoute>
+                    <CompleteProfile />
+                  </ProtectedRoute>
+                }
+              />
               <Route 
                 path="/dashboard" 
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute allowedRoles={["publisher", "admin"]}>
                     <Dashboard />
                   </ProtectedRoute>
                 } 
@@ -66,7 +84,7 @@ const App = () => {
               <Route 
                 path="/advertiser-dashboard" 
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute allowedRoles={["advertiser", "admin"]}>
                     <AdvertiserDashboard />
                   </ProtectedRoute>
                 } 
@@ -74,10 +92,18 @@ const App = () => {
               <Route 
                 path="/admin-dashboard" 
                 element={
-                  <ProtectedRoute>
+                  <ProtectedRoute allowedRoles={["admin"]}>
                     <AdminDashboard />
                   </ProtectedRoute>
                 } 
+              />
+              <Route
+                path="/settings"
+                element={
+                  <ProtectedRoute allowedRoles={["publisher", "advertiser", "admin"]}>
+                    <Settings />
+                  </ProtectedRoute>
+                }
               />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />

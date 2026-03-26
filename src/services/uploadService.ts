@@ -21,7 +21,7 @@ export const uploadService = {
   // Get all uploads
   getUploads: async (): Promise<UploadItem[]> => {
     const response = await api.get('/uploads');
-    return response.data;
+    return Array.isArray(response.data) ? response.data : [];
   },
 
   // Grant access to an advertiser
@@ -156,6 +156,9 @@ export const uploadService = {
         const response = await api.get('/uploads/validations');
         return response.data;
       } catch (err: any) {
+        if (err?.response?.status === 403) {
+          return {};
+        }
         console.error("❌ getAllValidations error", err);
         return {};
       }

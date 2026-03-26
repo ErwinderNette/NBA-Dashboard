@@ -49,6 +49,9 @@ func main() {
 	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
 		log.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(uploadsDir, "avatars"), 0755); err != nil {
+		log.Fatal(err)
+	}
 
 	// Init DB
 	db = config.InitDB()
@@ -78,6 +81,7 @@ func main() {
 	app.Use(securityHeadersMiddleware())
 	app.Use(rateLimitMiddleware())
 	app.Use(cors.New(corsConfigFromEnv()))
+	app.Use("/api/auth", authRateLimitMiddleware())
 
 	// Health endpoints for orchestrators and load balancers.
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -101,6 +105,9 @@ func main() {
 	app.Get("/api/uploads", handlers.AuthRequired(), handleGetUploads)
 	app.Get("/api/advertisers", handlers.AuthRequired(), handleGetAdvertisers)
 	app.Get("/api/users", handlers.AuthRequired(), handleGetUsers)
+	app.Post("/api/users/me/avatar", handlers.AuthRequired(), handlers.HandleUploadAvatar(db))
+	app.Get("/api/users/me/avatar", handlers.AuthRequired(), handlers.HandleGetAvatar(db))
+	app.Delete("/api/users/me/avatar", handlers.AuthRequired(), handlers.HandleDeleteAvatar(db))
 	app.Post("/api/uploads/:id/access", handlers.AuthRequired(), handleGrantAccessDB)
 	app.Get("/api/uploads/:id/download", handlers.AuthRequired(), handleDownloadFile)
 	app.Patch("/api/uploads/:id/status", handlers.AuthRequired(), handleUpdateUploadStatus)
@@ -125,6 +132,16 @@ func main() {
 	app.Get("/api/campaigns/scheduler/monitoring", handlers.AuthRequired(), handlers.HandleGetSchedulerMonitoring(db))
 
 	// Login-Endpoint
+	app.Post("/api/auth/login", handlers.HandleLogin(db))
+	app.Post("/api/auth/register", handlers.HandleRegister(db))
+	app.Get("/api/auth/company-options", handlers.HandleCompanyOptions(db))
+	app.Post("/api/auth/forgot-password", handlers.HandleForgotPassword(db))
+	app.Post("/api/auth/reset-password", handlers.HandleResetPassword(db))
+	app.Post("/api/auth/google", handlers.HandleGoogleAuth(db))
+	app.Get("/api/auth/me", handlers.AuthRequired(), handlers.HandleAuthMe(db))
+	app.Post("/api/auth/complete-profile", handlers.AuthRequired(), handlers.HandleCompleteProfile(db))
+
+	// Legacy Login-Endpoint (kept for backward compatibility)
 	app.Post("/api/login", handlers.HandleLogin(db))
 
 	serverAddr := ":" + envWithDefault("PORT", "3001")
@@ -284,7 +301,7 @@ func handleGetUploads(c *fiber.Ctx) error {
 		models.Upload
 		AssignedAdvertiserEmail *string `json:"assigned_advertiser_email"`
 	}
-	var uploadsWithAdvertiser []UploadWithAdvertiser
+	uploadsWithAdvertiser := make([]UploadWithAdvertiser, 0, len(uploads))
 	for _, u := range uploads {
 		var emailPtr *string
 		if advID, ok := m[u.ID]; ok {
@@ -877,6 +894,21 @@ func buildStoredUploadPath(originalFilename string) string {
 
 	stored := fmt.Sprintf("%s_%d%s", name, time.Now().UnixNano(), ext)
 	return filepath.Join("uploads", stored)
+}
+
+func authRateLimitMiddleware() fiber.Handler {
+	return limiter.New(limiter.Config{
+		Max:        envIntWithDefault("AUTH_RATE_LIMIT_MAX", 30),
+		Expiration: time.Duration(envIntWithDefault("AUTH_RATE_LIMIT_WINDOW_SECONDS", 60)) * time.Second,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error": "Too many authentication attempts. Please try again later.",
+			})
+		},
+	})
 }
 
 func validateUploadFile(file *multipart.FileHeader) error {
