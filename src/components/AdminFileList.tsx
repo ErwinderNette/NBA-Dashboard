@@ -84,11 +84,29 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     { id: "260", name: "NEW Energie Kampagne" },
     { id: "122", name: "eprimo Kampagne" },
     { id: "207", name: "Ankerkraut Kampagne" },
+    { id: "173", name: "MAINGAU Kampagne" },
+    { id: "285", name: "entega Kampagne" },
+    { id: "290", name: "Enercity Kampagne" },
+    { id: "88", name: "Bank of Scotland Kampagne" },
+    { id: "168", name: "Trendtours Kampagne" },
+    { id: "294", name: "Goldgas Kampagne" },
+    { id: "194", name: "Geld für E-Auto Kampagne" }
   ];
   const campaignConfigByKey: Record<string, { id: string; name: string; commissionGroupId?: string; triggerId?: string; advertiserId?: string }> = {
     "newenergie": { id: "260", name: "NEW Energie", commissionGroupId: "912", triggerId: "6", advertiserId: "167" },
     "eprimo": { id: "122", name: "eprimo", commissionGroupId: "394", triggerId: "1" },
     "ankerkraut": { id: "207", name: "Ankerkraut" },
+    "maingau": { id: "173", name: "MAINGAU", commissionGroupId: "544", triggerId: "1" },
+    "entega": { id: "285", name: "entega", commissionGroupId: "1122", triggerId: "1" },
+    "enercity": { id: "290", name: "Enercity", commissionGroupId: "1142", triggerId: "1" },
+    "bankofscotland": { id: "88", name: "Bank of Scotland", commissionGroupId: "310", triggerId: "1" },
+    "bos": { id: "88", name: "Bank of Scotland", commissionGroupId: "310", triggerId: "1" },
+    "trendtours": { id: "168", name: "Trendtours", commissionGroupId: "529", triggerId: "1" },
+    "goldgas": { id: "294", name: "Goldgas", commissionGroupId: "1172", triggerId: "1" },
+    "geldfuereauto": { id: "194", name: "Geld für E-Auto", commissionGroupId: "624", triggerId: "1" },
+    "geldforeauto": { id: "194", name: "Geld für E-Auto", commissionGroupId: "624", triggerId: "1" },
+    "geldfuerauto": { id: "194", name: "Geld für E-Auto", commissionGroupId: "624", triggerId: "1" },
+    "geldforauto": { id: "194", name: "Geld für E-Auto", commissionGroupId: "624", triggerId: "1" },
   };
 
   const normalizePartnerKey = (value?: string) =>
