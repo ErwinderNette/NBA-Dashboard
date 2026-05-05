@@ -332,6 +332,14 @@ func HandleGoogleAuth(db *gorm.DB) fiber.Handler {
 		} else if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to process user"})
 		} else {
+			// Prevent silent account takeover: local accounts must continue to use password
+			// until explicit account-linking is implemented.
+			if strings.EqualFold(strings.TrimSpace(user.AuthProvider), "local") &&
+				(user.ProviderSubject == nil || strings.TrimSpace(*user.ProviderSubject) == "") {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"error": "account exists with password login; please use your password first",
+				})
+			}
 			if user.AuthProvider == "google" && user.ProviderSubject != nil && *user.ProviderSubject != strings.TrimSpace(info.Sub) {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "google account mismatch"})
 			}
@@ -511,8 +519,9 @@ func buildResetURL(token string) string {
 }
 
 func sendPasswordResetEmail(email string, resetURL string) {
+	_ = resetURL
 	// MVP transport: log-based dispatch. Replace with SMTP/provider integration.
-	log.Printf("auth.forgot_password email=%s reset_url=%s", email, resetURL)
+	log.Printf("auth.forgot_password email=%s token_generated=true", email)
 }
 
 func normalizeEmail(email string) string {

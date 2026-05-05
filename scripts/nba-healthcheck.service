@@ -1,0 +1,7 @@
+[Unit]
+Description=NBA production health check
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/app
+ExecStart=%h/app/scripts/monitor-health.sh

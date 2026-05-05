@@ -162,7 +162,7 @@ const AdvertiserDashboard = () => {
               size="sm"
               onClick={() => setActiveFilter("returned_to_publisher")}
             >
-              An Publisher zurueck
+              An Publisher zurück
             </Button>
             <Input
               className="ml-auto w-full max-w-sm"

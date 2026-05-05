@@ -102,6 +102,7 @@ export const uploadService = {
         publisherId?: string;
         commissionGroupId?: string;
         triggerId?: string;
+        forceRefresh?: boolean;
       }
     ): Promise<any> => {
       try {
@@ -111,6 +112,7 @@ export const uploadService = {
         if (options?.publisherId) params.publisherId = options.publisherId;
         if (options?.commissionGroupId) params.commissionGroupId = options.commissionGroupId;
         if (options?.triggerId) params.triggerId = options.triggerId;
+        if (options?.forceRefresh) params.forceRefresh = "true";
         const response = await api.get(`/uploads/${uploadId}/validate`, {
           params,
           timeout: 120000, // 120s, weil API-Call groß sein kann

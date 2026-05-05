@@ -42,6 +42,7 @@ var db *gorm.DB
 func main() {
 	// .env laden
 	godotenv.Load(".env")
+	hydrateEnvFromSecretFiles()
 	validateSecurityConfig()
 
 	// Create uploads directory if it doesn't exist
@@ -159,6 +160,30 @@ func main() {
 	defer cancel()
 	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
+	}
+}
+
+func hydrateEnvFromSecretFiles() {
+	secretKeys := []string{"JWT_SECRET", "DB_PASSWORD", "NETWORK_API_TOKEN"}
+	for _, key := range secretKeys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			continue
+		}
+		filePath := strings.TrimSpace(os.Getenv(key + "_FILE"))
+		if filePath == "" {
+			filePath = "/run/secrets/" + strings.ToLower(key)
+		}
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
+		}
+		value := strings.TrimSpace(string(content))
+		if value == "" {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			log.Printf("warning: failed to set env from secret file for %s: %v", key, err)
+		}
 	}
 }
 
@@ -319,6 +344,21 @@ func handleGetUploads(c *fiber.Ctx) error {
 
 // Handle get advertisers
 func handleGetAdvertisers(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	if role != "admin" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can view advertisers"})
+	}
+
 	var advertisers []models.User
 	db.Where("role = ?", "advertiser").Find(&advertisers)
 
@@ -338,6 +378,21 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 
 // Liefert alle User mit Company
 func handleGetUsers(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	if role != "admin" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can view users"})
+	}
+
 	var users []models.User
 	db.Find(&users)
 
@@ -390,13 +445,13 @@ func handleGrantAccessDB(c *fiber.Ctx) error {
 		AdvertiserID: body.AdvertiserId,
 		ExpiresAt:    body.ExpiresAt,
 	}
-	if err := db.Create(&access).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&access).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.Upload{}).Where("id = ?", uploadID).Update("status", "assigned").Error
+	}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to grant access"})
-	}
-
-	// Setze Status auf 'assigned'
-	if err := db.Model(&models.Upload{}).Where("id = ?", uploadID).Update("status", "assigned").Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload status"})
 	}
 
 	return c.JSON(fiber.Map{"message": "Access granted successfully"})
@@ -435,8 +490,8 @@ func handleDownloadFile(c *fiber.Ctx) error {
 			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
 			}
-			var access models.UploadAccess
-			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+			ok, err := hasActiveUploadAccess(upload.ID, user.ID)
+			if err != nil || !ok {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to download this file"})
 			}
 		} else {
@@ -513,12 +568,22 @@ func handleDeleteUpload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
 	}
 
-	if err := os.Remove(upload.FilePath); err != nil && !os.IsNotExist(err) {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete file from disk"})
-	}
-
-	if err := db.Delete(&upload).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("upload_id = ?", upload.ID).Delete(&models.UploadAccess{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("upload_id = ?", upload.ID).Delete(&models.ValidationResult{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("upload_id = ?", upload.ID).Delete(&models.UploadOrderCandidate{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&upload).Error
+	}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to delete upload in DB"})
+	}
+	if err := os.Remove(upload.FilePath); err != nil && !os.IsNotExist(err) {
+		log.Printf("warning: failed to delete upload file after DB delete: %v", err)
 	}
 
 	return c.JSON(fiber.Map{"message": "Upload deleted successfully"})
@@ -552,8 +617,8 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
 			}
-			var access models.UploadAccess
-			if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+			ok, err := hasActiveUploadAccess(upload.ID, user.ID)
+			if err != nil || !ok {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to replace this file"})
 			}
 		} else {
@@ -569,12 +634,11 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	_ = os.Remove(upload.FilePath)
-
 	filename := buildStoredUploadPath(file.Filename)
 	if err := c.SaveFile(file, filename); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save file"})
 	}
+	oldFilePath := upload.FilePath
 
 	upload.Filename = file.Filename
 	upload.FileSize = file.Size
@@ -585,8 +649,14 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	if role == "advertiser" {
 		upload.Status = "feedback_submitted"
 	}
-	if err := db.Save(&upload).Error; err != nil {
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		return tx.Save(&upload).Error
+	}); err != nil {
+		_ = os.Remove(filename)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload in DB"})
+	}
+	if err := os.Remove(oldFilePath); err != nil && !os.IsNotExist(err) {
+		log.Printf("warning: failed to remove previous upload file: %v", err)
 	}
 
 	return c.JSON(fiber.Map{"message": "File replaced successfully"})
@@ -621,8 +691,8 @@ func handleGetFileContent(c *fiber.Ctx) error {
 				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
-				var access models.UploadAccess
-				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+				ok, err := hasActiveUploadAccess(upload.ID, user.ID)
+				if err != nil || !ok {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
 			} else {
@@ -672,8 +742,8 @@ func handleSaveFileContent(c *fiber.Ctx) error {
 				if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
-				var access models.UploadAccess
-				if err := db.Where("upload_id = ? AND advertiser_id = ?", upload.ID, user.ID).First(&access).Error; err != nil {
+				ok, err := hasActiveUploadAccess(upload.ID, user.ID)
+				if err != nil || !ok {
 					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
 				}
 			} else {
@@ -701,9 +771,28 @@ func handleSaveFileContent(c *fiber.Ctx) error {
 	if role == "advertiser" {
 		upload.Status = "feedback_submitted"
 	}
-	db.Save(&upload)
+	if err := db.Save(&upload).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload metadata"})
+	}
 
 	return c.JSON(fiber.Map{"message": "File saved successfully"})
+}
+
+func hasActiveUploadAccess(uploadID uint, advertiserID uint) (bool, error) {
+	var access models.UploadAccess
+	err := db.Where(
+		"upload_id = ? AND advertiser_id = ? AND (expires_at IS NULL OR expires_at > ?)",
+		uploadID,
+		advertiserID,
+		time.Now(),
+	).First(&access).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func validateSecurityConfig() {

@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  postgres-prod:
+    image: postgres:15-alpine
+    container_name: postgres-prod
+    restart: unless-stopped
+    env_file:
+      - prod.env
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+    networks:
+      - nba-prod
+
+  backend-prod:
+    image: ghcr.io/${GHCR_OWNER}/nba-backend:${BACKEND_IMAGE_TAG:-latest}
+    container_name: backend-prod
+    restart: unless-stopped
+    env_file:
+      - prod.env
+    environment:
+      JWT_SECRET_FILE: /run/secrets/jwt_secret_prod
+      DB_PASSWORD_FILE: /run/secrets/db_password_prod
+      NETWORK_API_TOKEN_FILE: /run/secrets/network_api_token_prod
+    volumes:
+      - uploads-prod:/app/uploads
+    secrets:
+      - jwt_secret_prod
+      - db_password_prod
+      - network_api_token_prod
+    networks:
+      - nba-prod
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.backend-prod.rule=Host(`nba.uppr.de`) && (PathPrefix(`/api`) || PathPrefix(`/health`) || PathPrefix(`/ready`))
+      - traefik.http.routers.backend-prod.entrypoints=websecure
+      - traefik.http.routers.backend-prod.tls.certresolver=le
+      - traefik.http.services.backend-prod.loadbalancer.server.port=3001
+
+  frontend-prod:
+    image: ghcr.io/${GHCR_OWNER}/nba-frontend:${FRONTEND_IMAGE_TAG:-latest}
+    container_name: frontend-prod
+    restart: unless-stopped
+    networks:
+      - nba-prod
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.frontend-prod.rule=Host(`nba.uppr.de`)
+      - traefik.http.routers.frontend-prod.priority=1
+      - traefik.http.routers.frontend-prod.entrypoints=websecure
+      - traefik.http.routers.frontend-prod.tls.certresolver=le
+      - traefik.http.services.frontend-prod.loadbalancer.server.port=80
+
+volumes:
+  pgdata-prod:
+    name: pgdata-prod
+  uploads-prod:
+    name: uploads-prod
+
+networks:
+  nba-prod:
+    name: nba-prod
+  edge:
+    external: true
+
+secrets:
+  jwt_secret_prod:
+    external: true
+  db_password_prod:
+    external: true
+  network_api_token_prod:
+    external: true

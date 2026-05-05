@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,19 @@ func NewCampaignSyncService() *CampaignSyncService {
 }
 
 func (s *CampaignSyncService) SyncCampaign(ctx context.Context, db *gorm.DB, campaign *models.Campaign, fromDate string, toDate string) (int, int, error) {
+	var hasLock bool
+	if err := db.WithContext(ctx).Raw("SELECT pg_try_advisory_lock(?)", int64(campaign.ID)).Scan(&hasLock).Error; err != nil {
+		return 0, 0, fmt.Errorf("failed to acquire sync lock: %w", err)
+	}
+	if !hasLock {
+		return 0, 0, fmt.Errorf("sync already running for campaign %d", campaign.ID)
+	}
+	defer func() {
+		if err := db.WithContext(ctx).Exec("SELECT pg_advisory_unlock(?)", int64(campaign.ID)).Error; err != nil {
+			log.Printf("⚠️ failed to release sync lock: %v", err)
+		}
+	}()
+
 	run := models.CampaignSyncRun{
 		CampaignID: campaign.ID,
 		Status:     "running",
@@ -47,11 +61,13 @@ func (s *CampaignSyncService) SyncCampaign(ctx context.Context, db *gorm.DB, cam
 		run.ErrorMessage = err.Error()
 		run.FetchedCount = fetchedCount
 		run.UpsertedCount = upsertedCount
-		_ = db.Save(&run).Error
+		if saveErr := db.Save(&run).Error; saveErr != nil {
+			log.Printf("❌ failed to save failed sync run: %v", saveErr)
+		}
 		return err
 	}
 
-	apiURL, err := buildOrdersAPIURL(campaign.ExternalCampaignID, fromDate, toDate)
+	apiURL, err := BuildOrdersAPIURL(campaign.ExternalCampaignID, fromDate, toDate)
 	if err != nil {
 		return fetchedCount, upsertedCount, finalErr(err)
 	}
@@ -63,91 +79,94 @@ func (s *CampaignSyncService) SyncCampaign(ctx context.Context, db *gorm.DB, cam
 	}
 	fetchedCount = len(orders)
 
-	for _, o := range orders {
-		payload := map[string]any{
-			"id":                  strings.TrimSpace(o.ExternalOrderID),
-			"ordertoken":          strings.TrimSpace(o.OrderToken),
-			"subid":               strings.TrimSpace(o.SubID),
-			"timestamp":           strings.TrimSpace(o.Timestamp),
-			"status":              o.Status,
-			"commission":          strings.TrimSpace(o.Commission),
-			"project_id":          strings.TrimSpace(o.ProjectID),
-			"publisher_id":        strings.TrimSpace(o.PublisherID),
-			"commission_group_id": strings.TrimSpace(o.CommissionGroupID),
-			"trigger_id":          strings.TrimSpace(o.TriggerID),
-			"campaign_id":         strings.TrimSpace(o.CampaignID),
-		}
-
-		eventTimestamp := parseExternalOrderTime(o.Timestamp)
-
-		var existing models.CampaignOrder
-		var lookupErr error
-		externalID := strings.TrimSpace(o.ExternalOrderID)
-		if externalID != "" {
-			lookupErr = db.Where("external_order_id = ?", externalID).First(&existing).Error
-		} else {
-			lookup := db.Where("campaign_id = ? AND order_token = ? AND sub_id = ?", campaign.ID, strings.TrimSpace(o.OrderToken), strings.TrimSpace(o.SubID))
-			if eventTimestamp != nil {
-				lookup = lookup.Where("event_timestamp = ?", *eventTimestamp)
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		for _, o := range orders {
+			payload := map[string]any{
+				"id":                  strings.TrimSpace(o.ExternalOrderID),
+				"ordertoken":          strings.TrimSpace(o.OrderToken),
+				"subid":               strings.TrimSpace(o.SubID),
+				"timestamp":           strings.TrimSpace(o.Timestamp),
+				"status":              o.Status,
+				"commission":          strings.TrimSpace(o.Commission),
+				"project_id":          strings.TrimSpace(o.ProjectID),
+				"publisher_id":        strings.TrimSpace(o.PublisherID),
+				"commission_group_id": strings.TrimSpace(o.CommissionGroupID),
+				"trigger_id":          strings.TrimSpace(o.TriggerID),
+				"campaign_id":         strings.TrimSpace(o.CampaignID),
 			}
-			lookupErr = lookup.First(&existing).Error
-		}
 
-		if lookupErr != nil && lookupErr != gorm.ErrRecordNotFound {
-			log.Printf("❌ campaign sync lookup failed: %v", lookupErr)
-			continue
-		}
+			eventTimestamp := parseExternalOrderTime(o.Timestamp)
 
-		if lookupErr == gorm.ErrRecordNotFound {
-			record := models.CampaignOrder{
-				CampaignID:       campaign.ID,
-				ExternalOrderID:  externalID,
-				OrderToken:       strings.TrimSpace(o.OrderToken),
-				SubID:            strings.TrimSpace(o.SubID),
-				EventTimestamp:   eventTimestamp,
-				Status:           o.Status,
-				Commission:       strings.TrimSpace(o.Commission),
-				Payload:          payload,
-				SourceLastChange: parseExternalOrderTime(payloadString(payload, "last_change")),
-				FirstSeenAt:      time.Now(),
-				LastSeenAt:       time.Now(),
+			var existing models.CampaignOrder
+			var lookupErr error
+			externalID := strings.TrimSpace(o.ExternalOrderID)
+			if externalID != "" {
+				lookupErr = tx.Where("external_order_id = ?", externalID).First(&existing).Error
+			} else {
+				lookup := tx.Where("campaign_id = ? AND order_token = ? AND sub_id = ?", campaign.ID, strings.TrimSpace(o.OrderToken), strings.TrimSpace(o.SubID))
+				if eventTimestamp != nil {
+					lookup = lookup.Where("event_timestamp = ?", *eventTimestamp)
+				}
+				lookupErr = lookup.First(&existing).Error
 			}
-			if record.ExternalOrderID == "" {
-				// Fallback für API-Responses ohne globale ID.
-				record.ExternalOrderID = fmt.Sprintf("fallback:%d:%s:%s:%s", campaign.ID, record.OrderToken, record.SubID, strings.TrimSpace(o.Timestamp))
+
+			if lookupErr != nil && lookupErr != gorm.ErrRecordNotFound {
+				return lookupErr
 			}
-			if err := db.Create(&record).Error; err != nil {
-				log.Printf("❌ campaign sync create failed: %v", err)
+
+			if lookupErr == gorm.ErrRecordNotFound {
+				record := models.CampaignOrder{
+					CampaignID:       campaign.ID,
+					ExternalOrderID:  externalID,
+					OrderToken:       strings.TrimSpace(o.OrderToken),
+					SubID:            strings.TrimSpace(o.SubID),
+					EventTimestamp:   eventTimestamp,
+					Status:           o.Status,
+					Commission:       strings.TrimSpace(o.Commission),
+					Payload:          payload,
+					SourceLastChange: parseExternalOrderTime(payloadString(payload, "last_change")),
+					FirstSeenAt:      time.Now(),
+					LastSeenAt:       time.Now(),
+				}
+				if record.ExternalOrderID == "" {
+					record.ExternalOrderID = fmt.Sprintf("fallback:%d:%s:%s:%s", campaign.ID, record.OrderToken, record.SubID, strings.TrimSpace(o.Timestamp))
+				}
+				if err := tx.Create(&record).Error; err != nil {
+					return err
+				}
+				upsertedCount++
 				continue
 			}
+
+			existing.CampaignID = campaign.ID
+			if externalID != "" {
+				existing.ExternalOrderID = externalID
+			}
+			existing.OrderToken = strings.TrimSpace(o.OrderToken)
+			existing.SubID = strings.TrimSpace(o.SubID)
+			existing.EventTimestamp = eventTimestamp
+			existing.Status = o.Status
+			existing.Commission = strings.TrimSpace(o.Commission)
+			existing.Payload = payload
+			existing.SourceLastChange = parseExternalOrderTime(payloadString(payload, "last_change"))
+			existing.LastSeenAt = time.Now()
+			if err := tx.Save(&existing).Error; err != nil {
+				return err
+			}
 			upsertedCount++
-			continue
 		}
 
-		existing.CampaignID = campaign.ID
-		if externalID != "" {
-			existing.ExternalOrderID = externalID
+		now := time.Now()
+		campaign.LastSyncedAt = &now
+		if err := tx.Save(campaign).Error; err != nil {
+			log.Printf("⚠️ failed to update campaign last_synced_at: %v", err)
 		}
-		existing.OrderToken = strings.TrimSpace(o.OrderToken)
-		existing.SubID = strings.TrimSpace(o.SubID)
-		existing.EventTimestamp = eventTimestamp
-		existing.Status = o.Status
-		existing.Commission = strings.TrimSpace(o.Commission)
-		existing.Payload = payload
-		existing.SourceLastChange = parseExternalOrderTime(payloadString(payload, "last_change"))
-		existing.LastSeenAt = time.Now()
-		if err := db.Save(&existing).Error; err != nil {
-			log.Printf("❌ campaign sync update failed: %v", err)
-			continue
-		}
-		upsertedCount++
+		return nil
+	}); err != nil {
+		return fetchedCount, upsertedCount, finalErr(err)
 	}
 
 	now := time.Now()
-	campaign.LastSyncedAt = &now
-	if err := db.Save(campaign).Error; err != nil {
-		log.Printf("⚠️ failed to update campaign last_synced_at: %v", err)
-	}
 
 	run.FinishedAt = &now
 	run.Status = "success"
@@ -161,10 +180,47 @@ func (s *CampaignSyncService) SyncCampaign(ctx context.Context, db *gorm.DB, cam
 	return fetchedCount, upsertedCount, nil
 }
 
-func buildOrdersAPIURL(campaignExternalID string, fromDate string, toDate string) (string, error) {
+func BuildOrdersAPIURL(campaignExternalID string, fromDate string, toDate string) (string, error) {
+	campaignID := strings.TrimSpace(campaignExternalID)
+	if campaignID == "260" || campaignID == "122" {
+		fromDate = "2025-01-01"
+		toDate = "2026-12-31"
+	}
+
+	legacyURL := strings.TrimSpace(os.Getenv("NETWORK_API_URL"))
+	if legacyURL != "" {
+		parsed, err := url.Parse(legacyURL)
+		if err != nil {
+			return "", fmt.Errorf("NETWORK_API_URL is invalid: %w", err)
+		}
+		q := parsed.Query()
+		if fromDate == "" {
+			fromDate = time.Now().AddDate(0, 0, -45).Format("2006-01-02")
+		}
+		if toDate == "" {
+			toDate = time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+		}
+		q.Set("condition[period][from]", fromDate)
+		q.Set("condition[period][to]", toDate)
+		q.Set("condition[l:campaigns]", campaignID)
+		if q.Get("condition[paymentstatus]") == "" {
+			q.Set("condition[paymentstatus]", "all")
+		}
+		if q.Get("condition[l:status]") == "" {
+			q.Set("condition[l:status]", "open,confirmed,canceled,paidout")
+		}
+		parsed.RawQuery = q.Encode()
+		return parsed.String(), nil
+	}
+
 	baseURL := strings.TrimSpace(os.Getenv("NETWORK_API_BASE_URL"))
 	if baseURL == "" {
 		return "", fmt.Errorf("NETWORK_API_BASE_URL is not configured")
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	token := strings.TrimSpace(os.Getenv("NETWORK_API_TOKEN"))
+	if token == "" {
+		return "", fmt.Errorf("NETWORK_API_TOKEN is not configured")
 	}
 	if fromDate == "" {
 		fromDate = time.Now().AddDate(0, 0, -45).Format("2006-01-02")
@@ -172,8 +228,8 @@ func buildOrdersAPIURL(campaignExternalID string, fromDate string, toDate string
 	if toDate == "" {
 		toDate = time.Now().AddDate(0, 0, 1).Format("2006-01-02")
 	}
-	path := "/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json"
-	return baseURL + path + "?condition[period][from]=" + fromDate + "&condition[period][to]=" + toDate + "&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=" + campaignExternalID, nil
+	path := "/" + token + "/admin/5/get-orders.json"
+	return baseURL + path + "?condition[period][from]=" + fromDate + "&condition[period][to]=" + toDate + "&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=" + campaignID, nil
 }
 
 func parseExternalOrderTime(raw string) *time.Time {

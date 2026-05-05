@@ -60,6 +60,9 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		var orders []services.ExternalOrder
 		useDBCache := isDBValidationCacheEnabled()
 		forceRefresh := strings.EqualFold(strings.TrimSpace(c.Query("forceRefresh")), "true") || strings.TrimSpace(c.Query("forceRefresh")) == "1"
+		if forceRefresh {
+			useDBCache = false
+		}
 
 		if campaignId != "" && useDBCache {
 			if err := upsertUploadOrderCandidates(db, upload.ID, campaignId, rows); err != nil {
@@ -114,11 +117,16 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		}
 
 		if campaignId != "" && len(orders) == 0 {
-			baseURL := os.Getenv("NETWORK_API_BASE_URL")
-			apiURL := os.Getenv("NETWORK_API_URL")
-			if baseURL != "" {
-				path := "/6115e2ebc15bf7cffcf39c56dfce109acc702fe1/admin/5/get-orders.json"
-				apiURL = baseURL + path + "?condition[period][from]=" + fromDate + "&condition[period][to]=" + toDate + "&condition[paymentstatus]=all&condition[l:status]=open,confirmed,canceled,paidout&condition[l:campaigns]=" + campaignId
+			apiURL := ""
+			missingNetworkConfig := false
+			networkConfigDetail := ""
+			builtURL, buildErr := services.BuildOrdersAPIURL(campaignId, fromDate, toDate)
+			if buildErr != nil {
+				log.Printf("❌ Live-API URL konnte nicht gebaut werden: %v", buildErr)
+				missingNetworkConfig = true
+				networkConfigDetail = buildErr.Error()
+			} else {
+				apiURL = builtURL
 			}
 			if apiURL != "" {
 				ordersSvc := services.NewOrdersService(apiURL)
@@ -128,6 +136,12 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 				} else {
 					log.Printf("✅ Orders per Live-API geladen (fallback): %d", len(orders))
 				}
+			}
+			if len(orders) == 0 && missingNetworkConfig {
+				return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+					"error":  "Network API is not configured",
+					"detail": networkConfigDetail,
+				})
 			}
 		}
 
@@ -162,38 +176,25 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 		}
 		// ✅ Speichere Validierungsergebnisse in der Datenbank
 		validationResult := models.ValidationResult{
-			UploadID:      upload.ID,
-			OrdersCount:   len(orders),
-			ValidatedRows: validated,
+			UploadID: upload.ID,
 		}
-
-		// Prüfe ob bereits ein Ergebnis existiert
-		var existingResult models.ValidationResult
-		if err := db.Where("upload_id = ?", upload.ID).First(&existingResult).Error; err == nil {
-			// Update existierendes Ergebnis
-			existingResult.OrdersCount = len(orders)
-			existingResult.ValidatedRows = validated
-			if err := db.Save(&existingResult).Error; err != nil {
-				log.Printf("❌ Fehler beim Aktualisieren der Validierungsergebnisse: %v", err)
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"error":  "Failed to persist validation result",
-					"detail": err.Error(),
-				})
-			} else {
-				log.Printf("✅ Validierungsergebnisse aktualisiert für UploadID=%d", upload.ID)
-			}
-		} else {
-			// Erstelle neues Ergebnis
-			if err := db.Create(&validationResult).Error; err != nil {
-				log.Printf("❌ Fehler beim Speichern der Validierungsergebnisse: %v", err)
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"error":  "Failed to persist validation result",
-					"detail": err.Error(),
-				})
-			} else {
-				log.Printf("✅ Validierungsergebnisse gespeichert für UploadID=%d", upload.ID)
-			}
+		if err := db.Where(models.ValidationResult{UploadID: upload.ID}).FirstOrCreate(&validationResult).Error; err != nil {
+			log.Printf("❌ Fehler beim Initialisieren der Validierungsergebnisse: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":  "Failed to persist validation result",
+				"detail": err.Error(),
+			})
 		}
+		validationResult.OrdersCount = len(orders)
+		validationResult.ValidatedRows = validated
+		if err := db.Save(&validationResult).Error; err != nil {
+			log.Printf("❌ Fehler beim Speichern der Validierungsergebnisse: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":  "Failed to persist validation result",
+				"detail": err.Error(),
+			})
+		}
+		log.Printf("✅ Validierungsergebnisse gespeichert für UploadID=%d", upload.ID)
 		return c.JSON(fiber.Map{
 			"uploadId":    upload.ID,
 			"ordersCount": len(orders),
@@ -203,6 +204,7 @@ func HandleValidateUpload(db *gorm.DB) fiber.Handler {
 }
 
 func deriveDateRangeFromRows(rows []map[string]string) (fromDate string, toDate string, ok bool) {
+	var earliest time.Time
 	var latest time.Time
 	for _, row := range rows {
 		tsRaw := strings.TrimSpace(row["Timestamp"])
@@ -213,22 +215,31 @@ func deriveDateRangeFromRows(rows []map[string]string) (fromDate string, toDate 
 		if err != nil {
 			continue
 		}
+		if earliest.IsZero() || ts.Before(earliest) {
+			earliest = ts
+		}
 		if latest.IsZero() || ts.After(latest) {
 			latest = ts
 		}
 	}
-	if latest.IsZero() {
+	if latest.IsZero() || earliest.IsZero() {
 		return "", "", false
 	}
 
 	now := time.Now()
-	// 45 Tage Puffer rückwärts reduziert große Responses, lässt aber genug Historie für Nachläufer.
-	from := latest.AddDate(0, 0, -45)
-	if from.After(now) {
-		from = now.AddDate(0, 0, -30)
+	// Nimm den echten Upload-Zeitraum statt nur "latest - 45 Tage".
+	// Das vermeidet, dass ältere Rows (z.B. Januar) beim Netzwerk-Abgleich fehlen.
+	from := earliest.AddDate(0, 0, -7)
+	// To-Date an latest + 7 Tage orientieren; für aktuelle Uploads bis heute+1 ausdehnen.
+	to := latest.AddDate(0, 0, 7)
+	if to.Before(now.AddDate(0, 0, 1)) {
+		to = now.AddDate(0, 0, 1)
 	}
-	// Bis heute + 1 Tag, damit späte Tagesupdates erfasst werden.
-	to := now.AddDate(0, 0, 1)
+	// Schutz gegen sehr große Queries bei fehlerhaften Daten.
+	minFrom := now.AddDate(-2, 0, 0)
+	if from.Before(minFrom) {
+		from = minFrom
+	}
 	if to.Before(from) {
 		to = from.AddDate(0, 0, 1)
 	}
@@ -281,21 +292,16 @@ func isDBValidationCacheEnabled() bool {
 }
 
 func ensureCampaignByExternalID(db *gorm.DB, externalID string) (models.Campaign, error) {
-	var campaign models.Campaign
-	err := db.Where("external_campaign_id = ?", externalID).First(&campaign).Error
-	if err == nil {
-		return campaign, nil
-	}
-	if err != gorm.ErrRecordNotFound {
-		return campaign, err
-	}
-	campaign = models.Campaign{
+	campaign := models.Campaign{
 		ExternalCampaignID: strings.TrimSpace(externalID),
 		Name:               fmt.Sprintf("Campaign %s", strings.TrimSpace(externalID)),
 		SyncIntervalMins:   30,
 		IsActive:           true,
 	}
-	return campaign, db.Create(&campaign).Error
+	if err := db.Where("external_campaign_id = ?", strings.TrimSpace(externalID)).FirstOrCreate(&campaign).Error; err != nil {
+		return campaign, err
+	}
+	return campaign, nil
 }
 
 func upsertUploadOrderCandidates(db *gorm.DB, uploadID uint, campaignID string, rows []map[string]string) error {

@@ -399,9 +399,6 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
 
   // ✅ Manuelle Aktualisierung der Validierung
   const handleRefreshValidation = async (id: number, file?: UploadItem) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:handleRefreshValidation',message:'Aktualisieren clicked',data:{uploadId:id},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     setIsValidating(prev => ({ ...prev, [id]: true }));
     setValidationError(prev => ({ ...prev, [id]: null }));
 
@@ -430,13 +427,8 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
         publisherId: publisherIdForValidation,
         commissionGroupId: commissionGroupIdForValidation,
         triggerId: triggerIdForValidation,
+        forceRefresh: true,
       });
-      // #region agent log
-      const rowCount = v?.rows?.length ?? 0;
-      const firstRowCells = v?.rows?.[0]?.cells ? Object.keys(v.rows[0].cells) : [];
-      const statusCell = v?.rows?.[0]?.cells?.["Status in der uppr Performance Platform"];
-      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:after validateUpload',message:'Validation response',data:{uploadId:id,rowsLength:rowCount,firstRowCellKeys:firstRowCells,statusCellValue:statusCell?.value,statusCellExists:!!statusCell},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B,C,E'})}).catch(()=>{});
-      // #endregion
       stopFakeProgress(id, 100);
       
       // ✅ Speichere die neuen Validierungsergebnisse im State
@@ -450,9 +442,6 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
         description: "Die Validierung wurde erfolgreich aktualisiert und gespeichert.",
       });
     } catch (err: any) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:validateUpload error',message:'Validate failed',data:{uploadId:id,errMessage:err?.message,status:err?.response?.status},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-      // #endregion
       stopFakeProgress(id, 0);
       const detail =
         err?.response?.data?.error ||
@@ -1034,18 +1023,10 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
 
     const dataRow = v.rows[rowIndex - 1];
     if (!dataRow?.cells) {
-      // #region agent log
-      if (rowIndex === 1) fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:getRowStatus',message:'No dataRow or cells',data:{fileId,rowIndex,hasV:!!v,rowsLen:v?.rows?.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       return null;
     }
 
     const statusCell = dataRow.cells["Status in der uppr Performance Platform"];
-    if (rowIndex === 1 && statusCell && typeof statusCell === "object" && "value" in statusCell) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/bf8c079c-bc18-4556-97dc-e65c4aa3dc9e',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'AdminFileList.tsx:getRowStatus',message:'Status found for row 1',data:{fileId,statusValue:statusCell.value},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
-    }
     if (statusCell && typeof statusCell === "object" && "value" in statusCell) {
       const statusValue = statusCell.value;
       // Status-Werte: 0 - offen, 1 - bestätigt, 2 - storniert, 3 - ausgezahlt

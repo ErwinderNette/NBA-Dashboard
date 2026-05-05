@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  postgres-staging:
+    image: postgres:15-alpine
+    container_name: postgres-staging
+    restart: unless-stopped
+    env_file:
+      - staging.env
+    volumes:
+      - pgdata-stg:/var/lib/postgresql/data
+    networks:
+      - nba-staging
+
+  backend-staging:
+    image: ghcr.io/${GHCR_OWNER}/nba-backend:${BACKEND_IMAGE_TAG:-latest}
+    container_name: backend-staging
+    restart: unless-stopped
+    env_file:
+      - staging.env
+    environment:
+      JWT_SECRET_FILE: /run/secrets/jwt_secret_staging
+      DB_PASSWORD_FILE: /run/secrets/db_password_staging
+      NETWORK_API_TOKEN_FILE: /run/secrets/network_api_token_staging
+    volumes:
+      - uploads-stg:/app/uploads
+    secrets:
+      - jwt_secret_staging
+      - db_password_staging
+      - network_api_token_staging
+    networks:
+      - nba-staging
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.backend-staging.rule=Host(`staging.nba.uppr.de`) && (PathPrefix(`/api`) || PathPrefix(`/health`) || PathPrefix(`/ready`))
+      - traefik.http.routers.backend-staging.entrypoints=websecure
+      - traefik.http.routers.backend-staging.tls.certresolver=le
+      - traefik.http.services.backend-staging.loadbalancer.server.port=3001
+
+  frontend-staging:
+    image: ghcr.io/${GHCR_OWNER}/nba-frontend:${FRONTEND_IMAGE_TAG:-latest}
+    container_name: frontend-staging
+    restart: unless-stopped
+    networks:
+      - nba-staging
+      - edge
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.frontend-staging.rule=Host(`staging.nba.uppr.de`)
+      - traefik.http.routers.frontend-staging.priority=1
+      - traefik.http.routers.frontend-staging.entrypoints=websecure
+      - traefik.http.routers.frontend-staging.tls.certresolver=le
+      - traefik.http.services.frontend-staging.loadbalancer.server.port=80
+
+volumes:
+  pgdata-stg:
+    name: pgdata-stg
+  uploads-stg:
+    name: uploads-stg
+
+networks:
+  nba-staging:
+    name: nba-staging
+  edge:
+    external: true
+
+secrets:
+  jwt_secret_staging:
+    external: true
+  db_password_staging:
+    external: true
+  network_api_token_staging:
+    external: true

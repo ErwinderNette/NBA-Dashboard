@@ -50,7 +50,7 @@ const Login = () => {
     /bereits|existiert|already/i.test(formFeedback.message);
   const companyError =
     isRegisterMode && touched.company && companyValue.length < 2
-      ? "Bitte Unternehmen auswaehlen oder mindestens 2 Zeichen eingeben."
+      ? "Bitte Unternehmen auswählen oder mindestens 2 Zeichen eingeben."
       : null;
   const contactNameError =
     isRegisterMode && touched.contactName && contactName.trim().length > 0 && contactName.trim().length < 2
@@ -318,12 +318,12 @@ const Login = () => {
         <Card className="bg-white/95 backdrop-blur-sm shadow-2xl border-white/50">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl font-bold text-gray-800">
-              {mode === "login" ? "Willkommen zurueck" : "Konto erstellen"}
+              {mode === "login" ? "Willkommen zurück" : "Konto erstellen"}
             </CardTitle>
             <p className="text-sm text-gray-500 pt-1">
               {mode === "login"
                 ? "Melde dich an und mach direkt an deinen Dateien weiter."
-                : "Wenige Felder, klare Rollenwahl, sofort startklar."}
+                : "In unter 1 Minute kannst du dein Konto erstellen und loslegen."}
             </p>
           </CardHeader>
           <CardContent>
@@ -378,7 +378,7 @@ const Login = () => {
                       }}
                     >
                       <SelectTrigger id="company" className={companyError ? "border-red-400 focus:ring-red-200" : ""}>
-                        <SelectValue placeholder={companyOptionsLoading ? "Lade Firmen..." : "Firma auswaehlen"} />
+                        <SelectValue placeholder={companyOptionsLoading ? "Lade Firmen..." : "Firma auswählen"} />
                       </SelectTrigger>
                       <SelectContent>
                         {companyOptions.map((option) => (

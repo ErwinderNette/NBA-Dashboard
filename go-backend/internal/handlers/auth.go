@@ -85,14 +85,27 @@ func AddInitialUsers(db *gorm.DB) {
 		log.Println("ℹ️ SEED_DEFAULT_USERS disabled; skipping default user seeding")
 		return
 	}
+
+	isProduction := strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
 	syncExisting := isEnvTrue("SEED_SYNC_EXISTING_USERS")
+	if isProduction && syncExisting {
+		log.Fatal("SEED_SYNC_EXISTING_USERS cannot be enabled in production")
+	}
+
+	adminPassword := strings.TrimSpace(os.Getenv("SEED_ADMIN_PASSWORD"))
+	advertiserPassword := strings.TrimSpace(os.Getenv("SEED_ADVERTISER_PASSWORD"))
+	publisherPassword := strings.TrimSpace(os.Getenv("SEED_PUBLISHER_PASSWORD"))
+	if adminPassword == "" || advertiserPassword == "" || publisherPassword == "" {
+		log.Println("⚠️ seed passwords not fully configured; skipping default user seeding")
+		return
+	}
 
 	users := []models.User{
 		{
 			Name:          "Admin",
 			Email:         "admin@mail.de",
 			Role:          "admin",
-			PasswordHash:  hashOrPanic("admin"),
+			PasswordHash:  hashOrPanic(adminPassword),
 			AuthProvider:  "local",
 			EmailVerified: true,
 			Company:       "",
@@ -101,7 +114,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Name:              "NEW Energie",
 			Email:             "newenergie@advertiser.de",
 			Role:              "advertiser",
-			PasswordHash:      hashOrPanic("4321"),
+			PasswordHash:      hashOrPanic(advertiserPassword),
 			AuthProvider:      "local",
 			EmailVerified:     true,
 			Company:           "NEW Energie",
@@ -112,7 +125,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Name:              "eprimo",
 			Email:             "eprimo@advertiser.de",
 			Role:              "advertiser",
-			PasswordHash:      hashOrPanic("4321"),
+			PasswordHash:      hashOrPanic(advertiserPassword),
 			AuthProvider:      "local",
 			EmailVerified:     true,
 			Company:           "eprimo",
@@ -123,7 +136,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Name:          "Shoop",
 			Email:         "shoop@publisher.de",
 			Role:          "publisher",
-			PasswordHash:  hashOrPanic("1234"),
+			PasswordHash:  hashOrPanic(publisherPassword),
 			AuthProvider:  "local",
 			EmailVerified: true,
 			Company:       "Shoop",
@@ -134,7 +147,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Name:          "Tellja",
 			Email:         "tellja@publisher.de",
 			Role:          "publisher",
-			PasswordHash:  hashOrPanic("1234"),
+			PasswordHash:  hashOrPanic(publisherPassword),
 			AuthProvider:  "local",
 			EmailVerified: true,
 			Company:       "Tellja",
@@ -146,7 +159,7 @@ func AddInitialUsers(db *gorm.DB) {
 			Name:          "Publisher",
 			Email:         "publisher@email.de",
 			Role:          "publisher",
-			PasswordHash:  hashOrPanic("1234"),
+			PasswordHash:  hashOrPanic(publisherPassword),
 			AuthProvider:  "local",
 			EmailVerified: true,
 			Company:       "",

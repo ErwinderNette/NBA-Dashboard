@@ -14,7 +14,7 @@ type User struct {
 	ID                  uint           `gorm:"primaryKey"`
 	Name                string         `gorm:"not null"`
 	Email               string         `gorm:"uniqueIndex;not null"`
-	PasswordHash        string         `gorm:"not null"`
+	PasswordHash        string         `gorm:"not null" json:"-"`
 	AuthProvider        string         `gorm:"not null;default:'local'" json:"auth_provider"`
 	ProviderSubject     *string        `gorm:"uniqueIndex" json:"provider_subject,omitempty"`
 	EmailVerified       bool           `gorm:"not null;default:false" json:"email_verified"`

@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.github
+.env
+.env.*
+*.md
+go-backend/uploads
+go-backend/.env
+go-backend/.env.*

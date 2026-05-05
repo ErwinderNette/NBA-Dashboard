@@ -4,12 +4,22 @@ import (
 	"nba-dashboard/internal/models"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
 // HandleReturnToPublisher setzt den Status eines Uploads auf 'returned_to_publisher'
 func HandleReturnToPublisher(db *gorm.DB) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		claims, ok := c.Locals("user").(jwt.MapClaims)
+		if !ok {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+		}
+		role, _ := claims["role"].(string)
+		if role != "admin" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can return files to publisher"})
+		}
+
 		uploadID := c.Params("id")
 		var upload models.Upload
 		if err := db.First(&upload, uploadID).Error; err != nil {

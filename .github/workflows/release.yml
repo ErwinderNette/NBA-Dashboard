@@ -57,3 +57,54 @@ jobs:
           name: backend-binary
           path: go-backend/app
           if-no-files-found: error
+
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    needs: [release-checks]
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy compose files to server
+        run: |
+          scp compose.traefik.yml compose.prod.yml "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/app/"
+
+      - name: Pre-deploy backup
+        run: |
+          ssh "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          if [ -x ~/app/scripts/backup.sh ]; then
+            ~/app/scripts/backup.sh
+          fi
+          EOF
+
+      - name: Deploy production compose stack
+        run: |
+          ssh "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          cd ~/app
+          export GHCR_OWNER="${{ github.repository_owner }}"
+          export BACKEND_IMAGE_TAG="latest"
+          export FRONTEND_IMAGE_TAG="latest"
+          podman login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          podman compose -f compose.traefik.yml up -d
+          podman compose -f compose.prod.yml pull
+          podman compose -f compose.prod.yml up -d
+          EOF
+
+      - name: Smoke test production
+        run: |
+          curl -fsS https://nba.uppr.de/health
+          curl -fsS https://nba.uppr.de/ready

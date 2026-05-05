@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,7 +70,7 @@ func (s *OrdersService) GetOrders(ctx context.Context) ([]ExternalOrder, error) 
 
 	// ✅ Retry bei unvollständigem JSON
 	for attempt := 1; attempt <= 2; attempt++ {
-		log.Printf("🌍 Hole Orders aus API (Attempt %d): %s\n", attempt, s.apiURL)
+		log.Printf("🌍 Hole Orders aus API (Attempt %d): %s\n", attempt, sanitizeURLForLogs(s.apiURL))
 
 		req, err := http.NewRequestWithContext(ctx, "GET", s.apiURL, nil)
 		if err != nil {
@@ -141,6 +142,20 @@ func (s *OrdersService) GetOrders(ctx context.Context) ([]ExternalOrder, error) 
 	}
 
 	return nil, lastErr
+}
+
+func sanitizeURLForLogs(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "<invalid-url>"
+	}
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) > 0 && segments[0] != "" {
+		segments[0] = "***"
+	}
+	parsed.Path = "/" + strings.Join(segments, "/")
+	parsed.RawQuery = ""
+	return parsed.String()
 }
 
 // rekursiv durchs JSON laufen

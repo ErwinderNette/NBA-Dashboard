@@ -28,6 +28,9 @@ dist-ssr
 go-backend/.env
 .env.production
 go-backend/.env.production
+prod.env
+staging.env
+acme.json
 
 # Generated and sensitive data artifacts
 go-backend/uploads/
