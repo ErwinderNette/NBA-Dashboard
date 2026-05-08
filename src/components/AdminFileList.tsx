@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { ArrowDown, ArrowUp, X as LucideX, Edit, Save, Loader2, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import React from "react";
 import { uploadService } from '@/services/uploadService';
 import api from "@/services/api";
 import { validationStorage } from '@/utils/validationStorage';
+import { getStatusMeta } from "@/utils/uploadStatus";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -20,6 +21,8 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
+import { sortUploads, type UploadListSortOrder } from "@/utils/uploadListSort";
+import { UploadListSortMenu } from "@/components/UploadListSortMenu";
 
 // Define types for the data structures based on the backend
 interface UploadItem {
@@ -33,6 +36,7 @@ interface UploadItem {
   advertiser_count?: number;
   last_modified_by?: string;
   assigned_advertiser_email?: string;
+  feedback_message?: string;
 }
 
 interface Advertiser {
@@ -58,12 +62,15 @@ interface AdminFileListProps {
   onGrantAccess: (uploadId: number, advertiserId: number, expiresAt: Date) => Promise<void>;
 }
 
+type ParticipantTone = "publisher" | "advertiser";
+
 const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   const { toast } = useToast();
 
   const [tempAssignments, setTempAssignments] = useState<Record<number, number>>({});
   const [allUsers, setAllUsers] = useState<UserWithCompany[]>([]);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [listSortOrder, setListSortOrder] = useState<UploadListSortOrder>("newest");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<UploadItem | null>(null);
 
@@ -80,6 +87,16 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   const [validationProgress, setValidationProgress] = useState<Record<number, number>>({});
   // Kampagne für Orders-API beim „Aktualisieren“ (wie campaignService.getOrders)
   const [validationCampaignId, setValidationCampaignId] = useState<string>("122");
+
+  const openUploadsForList = useMemo(
+    () => sortUploads((uploads ?? []).filter((file) => file.status !== "completed"), listSortOrder),
+    [uploads, listSortOrder]
+  );
+  const completedUploadsForList = useMemo(
+    () => sortUploads((uploads ?? []).filter((file) => file.status === "completed"), listSortOrder),
+    [uploads, listSortOrder]
+  );
+
   const validationCampaigns = [
     { id: "260", name: "NEW Energie Kampagne" },
     { id: "122", name: "eprimo Kampagne" },
@@ -150,6 +167,26 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       effectiveCampaign,
       campaignFromDropdown,
     };
+  };
+
+  const getCompanyLabelByEmail = (email?: string) => {
+    if (!email) return "";
+    const user = allUsers.find((u) => u.email === email);
+    if (user?.company?.trim()) return user.company.trim();
+    return email.split("@")[0] || email;
+  };
+
+  const getParticipantBadges = (file: UploadItem): Array<{ label: string; tone: ParticipantTone }> => {
+    const participants: Array<{ label: string; tone: ParticipantTone }> = [];
+    const publisherLabel = getCompanyLabelByEmail(file.uploaded_by);
+    if (publisherLabel) {
+      participants.push({ label: publisherLabel, tone: "publisher" });
+    }
+    const advertiserLabel = getCompanyLabelByEmail(file.assigned_advertiser_email);
+    if (advertiserLabel && advertiserLabel.toLowerCase() !== publisherLabel.toLowerCase()) {
+      participants.push({ label: advertiserLabel, tone: "advertiser" });
+    }
+    return participants;
   };
 
   const validationIntervalsRef = useRef<Record<number, ReturnType<typeof setInterval> | null>>({});
@@ -236,43 +273,6 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     api.get("/users").then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
   }, []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return 'bg-green-500';
-      case 'assigned':
-        return 'bg-blue-500';
-      case 'pending':
-        return 'bg-yellow-500';
-      case 'rejected':
-        return 'bg-red-500';
-      case 'granted':
-        return 'bg-blue-500';
-      default:
-        return 'bg-gray-400';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return 'Genehmigt';
-      case 'assigned':
-        return 'Zugewiesen';
-      case 'feedback':
-      case 'feedback_submitted':
-        return 'Feedback eingereicht';
-      case 'pending':
-        return 'Ausstehend';
-      case 'rejected':
-        return 'Abgelehnt';
-      case 'granted':
-        return 'Zugewiesen';
-      default:
-        return 'Unbekannt';
-    }
-  };
-
   const handleAdvertiserSelection = (uploadId: number, advertiserId: string) => {
     setTempAssignments(prev => ({
       ...prev,
@@ -280,8 +280,21 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     }));
   };
 
+  const getPreselectedAdvertiserId = (file: UploadItem): string => {
+    const tempValue = tempAssignments[file.id];
+    if (tempValue) return tempValue.toString();
+    if (!file.assigned_advertiser_email) return "";
+    const matched = advertisers.find((adv) => adv.email === file.assigned_advertiser_email);
+    return matched ? matched.id.toString() : "";
+  };
+
+  const isAdvertiserManualRequest = (file: UploadItem): boolean =>
+    file.filename.toLowerCase().startsWith("manual_request_advertiser_");
+
   const handleAdvertiserAssignment = async (uploadId: number) => {
-    const selectedAdvertiserId = tempAssignments[uploadId];
+    const currentFile = uploads.find((item) => item.id === uploadId);
+    const preselected = currentFile ? getPreselectedAdvertiserId(currentFile) : "";
+    const selectedAdvertiserId = tempAssignments[uploadId] || (preselected ? parseInt(preselected, 10) : 0);
     if (!selectedAdvertiserId) {
       toast({
         title: "Fehler",
@@ -501,12 +514,31 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     if (fileData[id]) {
       setIsSavingFile(prev => ({ ...prev, [id]: true }));
       try {
-        await uploadService.saveFileContent(id, fileData[id]);
+        const saveResult = await uploadService.saveFileContent(id, fileData[id]);
         setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(fileData[id])) }));
         toast({
           title: "Erfolg",
           description: "Datei wurde erfolgreich gespeichert.",
         });
+        if (Array.isArray(saveResult?.warnings) && saveResult.warnings.length > 0) {
+          const conflictFiles = Array.from(
+            new Set(
+              saveResult.warnings.flatMap((warning) =>
+                warning.conflicts.map((conflict) => conflict.filename).filter(Boolean)
+              )
+            )
+          );
+          const tokenPreview = saveResult.warnings
+            .slice(0, 3)
+            .map((warning) => warning.orderToken)
+            .join(", ");
+
+          toast({
+            title: "Dublettenwarnung",
+            description: `Ordertoken bereits in NBA-Datei(en): ${conflictFiles.join(", ")}. Betroffene Tokens: ${tokenPreview}${saveResult.warnings.length > 3 ? ", ..." : ""}`,
+            variant: "destructive",
+          });
+        }
         reloadUploads();
       } catch (err) {
         toast({
@@ -1096,25 +1128,44 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
       </AlertDialog>
 
       <div className="bg-white rounded-2xl shadow-lg p-6">
-        <h3 className="text-xl font-semibold text-gray-800 mb-6">Admin - Upload Verwaltung</h3>
-        <p className="text-gray-600 mb-6">
-          Prüfe und weise Uploads den entsprechenden Advertisern zu.
-        </p>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 pr-2">
+            <h3 className="text-xl font-semibold text-gray-800">Admin - Upload Verwaltung</h3>
+            <p className="mt-1 text-gray-600 text-sm sm:text-base">
+              Prüfe und weise Uploads den entsprechenden Advertisern zu.
+            </p>
+          </div>
+          <UploadListSortMenu value={listSortOrder} onChange={setListSortOrder} className="self-end sm:mt-0.5" />
+        </div>
 
         <div className="space-y-1">
-          <div className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
+          <div className="grid grid-cols-[40px,3fr,1.5fr,1.5fr,2fr,2fr,2fr] gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
             <div>Löschen</div>
             <div>Dateiname</div>
-            <div>Upload Datum</div>
-            <div>bearbeitet von</div>
-            <div>Kunde</div>
             <div>Status</div>
+            <div>Upload Datum</div>
+            <div>Partner</div>
+            <div>Kunde</div>
             <div>Aktionen</div>
           </div>
 
-          {(uploads ?? []).filter(file => file.status !== 'completed').map((file) => (
+          {openUploadsForList.map((file) => (
             <React.Fragment key={file.id}>
-              <div className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">
+              {(() => {
+                const lastModifierRole = allUsers.find(u => u.email === file.last_modified_by)?.role;
+                const isManualAdvertiserFlow = isAdvertiserManualRequest(file);
+                const canSendToAdvertiserFinal = isManualAdvertiserFlow && file.status === 'feedback' && lastModifierRole === 'publisher';
+                const canForwardInquiryToAdvertiser =
+                  file.status === "feedback_submitted" && !!getPreselectedAdvertiserId(file);
+                const canAssign =
+                  (file.status === "pending" || canSendToAdvertiserFinal || canForwardInquiryToAdvertiser) &&
+                  !!getPreselectedAdvertiserId(file);
+                const canReturnToPublisher =
+                  (file.status === 'assigned' || file.status === 'feedback' || file.status === 'feedback_submitted' || file.status === 'feedback_submitted_advertiser' || file.status === 'sent_to_publisher_advertiser') &&
+                  (lastModifierRole === 'advertiser' || lastModifierRole === 'publisher') &&
+                  !canSendToAdvertiserFinal;
+                return (
+              <div className="grid grid-cols-[40px,3fr,1.5fr,1.5fr,2fr,2fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">
                 <div className="flex justify-center">
                   <Button
                     variant="ghost"
@@ -1126,22 +1177,41 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                   </Button>
                 </div>
 
-                <div className="text-gray-800 font-medium truncate max-w-[350px] cursor-pointer" title={file.filename}>
+                <div className="text-sm text-gray-800 font-medium truncate max-w-[350px] cursor-pointer" title={file.filename}>
                   {file.filename}
+                </div>
+
+                <div className="flex items-center">
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs font-semibold ${getStatusMeta(file.status).badgeClassName}`}
+                  >
+                    {getStatusMeta(file.status).label}
+                  </span>
                 </div>
 
                 <div className="text-gray-600">
                   {new Date(file.upload_date).toLocaleDateString()}
                 </div>
 
-                <div className="text-gray-800">
-                  {file.last_modified_by || file.uploaded_by}
+                <div className="text-gray-800 flex flex-wrap gap-1">
+                  {getParticipantBadges(file).map((participant, index) => (
+                    <span
+                      key={`${participant.label}-${index}`}
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        participant.tone === "publisher"
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-fuchsia-100 text-fuchsia-700"
+                      }`}
+                    >
+                      {participant.label}
+                    </span>
+                  ))}
                 </div>
 
                 <div>
                   {file.status === 'pending' ? (
                     <Select
-                      value={tempAssignments[file.id]?.toString() || ""}
+                      value={getPreselectedAdvertiserId(file)}
                       onValueChange={(value) => handleAdvertiserSelection(file.id, value)}
                     >
                       <SelectTrigger className="w-full">
@@ -1167,13 +1237,6 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                   )}
                 </div>
 
-                <div className="flex items-center">
-                  <div
-                    className={`w-3 h-3 rounded-full ${getStatusColor(file.status)}`}
-                    title={getStatusText(file.status)}
-                  />
-                </div>
-
                 <div className="flex items-center space-x-2">
                   <Button
                     variant="ghost"
@@ -1193,8 +1256,16 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                       ${file.status === 'assigned' ? 'bg-pink-500 text-white' : 'text-gray-500'}
                       disabled:text-gray-300
                       ${file.status === 'assigned' ? '' : 'hover:bg-pink-100 focus:bg-pink-200 active:bg-pink-200 hover:text-white focus:text-white active:text-white disabled:bg-transparent'}`}
-                    disabled={file.status !== 'pending' || !tempAssignments[file.id]}
-                    title={file.status === 'pending' && tempAssignments[file.id] ? "Datei zuweisen/versenden" : "Bitte zuerst einen Advertiser wählen"}
+                    disabled={!canAssign}
+                    title={
+                      canForwardInquiryToAdvertiser
+                        ? "Rückfrage an den Advertiser weiterleiten (erneut zuweisen)"
+                        : canSendToAdvertiserFinal
+                          ? "Datei an Advertiser zurückschicken"
+                          : canAssign
+                            ? "Datei zuweisen/versenden"
+                            : "Bitte zuerst einen Advertiser wählen"
+                    }
                   >
                     <ArrowRight size={20} className={`${file.status === 'assigned' ? 'text-white' : 'text-gray-500 group-hover:text-white group-focus:text-white group-active:text-white'} transition-colors duration-200`} />
                   </Button>
@@ -1204,8 +1275,14 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                     size="sm"
                     onClick={() => handleReturnToPublisher(file.id)}
                     className="p-1 h-8 w-8 hover:bg-blue-200"
-                    disabled={!((file.status === 'assigned' || file.status === 'feedback_submitted') && allUsers.find(u => u.email === file.last_modified_by)?.role === 'advertiser')}
-                    title="Datei an Publisher zurückschicken"
+                    disabled={!canReturnToPublisher}
+                    title={
+                      canSendToAdvertiserFinal
+                        ? "Datei wartet auf Rücksendung an Advertiser"
+                        : file.status === "feedback_submitted" && lastModifierRole === "publisher"
+                          ? "Rückfrage an den Publisher zurückschicken"
+                          : "Datei an Publisher zurückschicken"
+                    }
                   >
                     <ArrowUp size={16} className="text-blue-600" />
                   </Button>
@@ -1221,6 +1298,18 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                   </Button>
                 </div>
               </div>
+                );
+              })()}
+
+              {!!file.feedback_message?.trim() &&
+                (file.status === "feedback_submitted" || file.status === "feedback") && (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50/90 px-3 py-2 text-xs text-slate-700 -mt-1 mb-1">
+                    <p className="font-semibold text-sky-900">Nachricht vom Publisher</p>
+                    <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed text-slate-800">
+                      {file.feedback_message}
+                    </p>
+                  </div>
+                )}
 
               {expandedId === file.id && (
                 <div className="bg-gray-50 rounded-lg p-6 mt-2 border border-gray-200">
@@ -1262,17 +1351,19 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                                 : "Mit Netzwerk vergleichen"}
                             </Button>
                           )}
-                          {file.status === "feedback_submitted" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleExportMissingStatusCsv(file)}
-                              className="h-7 text-[10px] px-2"
-                              title="Exportiert alle Zeilen ohne Status als CSV"
-                            >
-                              CSV ohne Status exportieren
-                            </Button>
-                          )}
+                          {!isValidating[file.id] &&
+                            validationData[file.id]?.rows &&
+                            validationData[file.id].rows.length > 0 && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleExportMissingStatusCsv(file)}
+                                className="h-7 text-[10px] px-2"
+                                title="Exportiert alle Zeilen ohne Status als CSV"
+                              >
+                                CSV ohne Status exportieren
+                              </Button>
+                            )}
                         </div>
                       </div>
 
@@ -1405,20 +1496,43 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
             Abgeschlossene Dateien
           </AccordionTrigger>
           <AccordionContent>
+            <div className="mb-3 flex justify-end">
+              <UploadListSortMenu value={listSortOrder} onChange={setListSortOrder} />
+            </div>
             <div className="space-y-1">
-              {(uploads ?? []).filter(file => file.status === 'completed').length === 0 && (
+              {completedUploadsForList.length === 0 && (
                 <div className="py-4 text-gray-500">Keine abgeschlossenen Dateien gefunden.</div>
               )}
 
-              {(uploads ?? []).filter(file => file.status === 'completed').map((file) => (
+              {completedUploadsForList.map((file) => (
                 <div
                   key={file.id}
-                  className="grid grid-cols-[40px,3fr,2fr,2fr,2fr,1fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center"
+                  className="grid grid-cols-[40px,3fr,1.5fr,1.5fr,2fr,2fr,2fr] gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center"
                 >
                   <div />
-                  <div className="text-gray-800 font-medium truncate max-w-[350px]">{file.filename}</div>
+                  <div className="text-sm text-gray-800 font-medium truncate max-w-[350px]">{file.filename}</div>
+                  <div className="flex items-center">
+                    <span
+                      className={`rounded-full px-2 py-1 text-xs font-semibold ${getStatusMeta(file.status).badgeClassName}`}
+                    >
+                      {getStatusMeta(file.status).label}
+                    </span>
+                  </div>
                   <div className="text-gray-600">{new Date(file.upload_date).toLocaleDateString()}</div>
-                  <div className="text-gray-800">{file.last_modified_by || file.uploaded_by}</div>
+                  <div className="text-gray-800 flex flex-wrap gap-1">
+                    {getParticipantBadges(file).map((participant, index) => (
+                      <span
+                        key={`${participant.label}-${index}`}
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          participant.tone === "publisher"
+                            ? "bg-blue-100 text-blue-700"
+                            : "bg-fuchsia-100 text-fuchsia-700"
+                        }`}
+                      >
+                        {participant.label}
+                      </span>
+                    ))}
+                  </div>
                   <div className="text-gray-800">
                     {(() => {
                       const email = file.assigned_advertiser_email;
@@ -1426,9 +1540,6 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
                       const user = allUsers.find(u => u.email === email);
                       return user?.company || 'Unbekannt';
                     })()}
-                  </div>
-                  <div className="flex items-center">
-                    <div className="w-3 h-3 rounded-full bg-green-500" />
                   </div>
                   <div className="flex items-center space-x-2">
                     <Button

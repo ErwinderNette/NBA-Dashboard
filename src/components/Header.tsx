@@ -1,5 +1,5 @@
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   User,
   LogOut,
@@ -30,6 +30,7 @@ const Header = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
   const userEmail = localStorage.getItem("userEmail") || "publisher@email.de";
   const userName = localStorage.getItem("userName") || "Benutzer";
   const userRole = localStorage.getItem("userRole") || "publisher";
@@ -111,8 +112,21 @@ const Header = () => {
     navigate("/settings");
   };
 
+  useEffect(() => {
+    const onScroll = () => setIsScrolled(window.scrollY > 0);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
-    <header className="bg-white shadow-sm border-b border-gray-200">
+    <header
+      className={`sticky top-0 z-50 border-b transition-all duration-300 ${
+        isScrolled
+          ? "border-gray-200/80 bg-white/90 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/75"
+          : "border-gray-200 bg-white shadow-sm"
+      }`}
+    >
       <div className="container mx-auto px-4 py-4 flex justify-between items-center">
         {/* Logo/Brand */}
         <div className="flex items-center space-x-2">
@@ -121,7 +135,7 @@ const Header = () => {
             alt="NBA-Dashboard Logo" 
             className="w-8 h-8 object-contain flex-shrink-0"
           />
-          <h1 className="text-xl font-semibold text-gray-800">NBA-Dashboard</h1>
+          <h1 className="text-xl font-semibold text-gray-800">NBA-Plattform</h1>
         </div>
         
         {/* User Info */}

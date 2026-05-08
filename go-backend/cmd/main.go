@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -101,10 +102,12 @@ func main() {
 
 	// Routes
 	app.Post("/api/upload", handlers.AuthRequired(), handleFileUpload)
+	app.Post("/api/uploads/manual-request", handlers.AuthRequired(), handleCreateManualRequestUpload)
 
 	// Add new routes
 	app.Get("/api/uploads", handlers.AuthRequired(), handleGetUploads)
 	app.Get("/api/advertisers", handlers.AuthRequired(), handleGetAdvertisers)
+	app.Get("/api/publishers", handlers.AuthRequired(), handleGetPublishers)
 	app.Get("/api/users", handlers.AuthRequired(), handleGetUsers)
 	app.Post("/api/users/me/avatar", handlers.AuthRequired(), handlers.HandleUploadAvatar(db))
 	app.Get("/api/users/me/avatar", handlers.AuthRequired(), handlers.HandleGetAvatar(db))
@@ -115,6 +118,7 @@ func main() {
 	app.Delete("/api/uploads/:id", handlers.AuthRequired(), handleDeleteUpload)
 	app.Post("/api/uploads/:id/replace", handlers.AuthRequired(), handleReplaceUpload)
 	app.Post("/api/uploads/:id/return-to-publisher", handlers.AuthRequired(), handlers.HandleReturnToPublisher(db))
+	app.Post("/api/uploads/:id/request-feedback", handlers.AuthRequired(), handleRequestFeedbackFromPublisher)
 	app.Get("/api/uploads/:id/content", handlers.AuthRequired(), handleGetFileContent)
 	app.Post("/api/uploads/:id/content", handlers.AuthRequired(), handleSaveFileContent)
 
@@ -240,6 +244,219 @@ func handleFileUpload(c *fiber.Ctx) error {
 	})
 }
 
+func handleCreateManualRequestUpload(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+
+	roleRaw, _ := claims["role"].(string)
+	role := strings.ToLower(strings.TrimSpace(roleRaw))
+	userEmail := claims["email"].(string)
+	if role != "publisher" && role != "advertiser" && role != "admin" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only publisher, advertiser or admin can create manual requests"})
+	}
+
+	var body struct {
+		Rows                 [][]string `json:"rows"`
+		AdvertiserID         uint       `json:"advertiserId"`
+		AdvertiserPresetName string     `json:"advertiserPresetName"`
+		PublisherID          uint       `json:"publisherId"`
+		PublisherEmail       string     `json:"publisherEmail"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	if len(body.Rows) == 0 {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "At least one row is required"})
+	}
+	var advertiser models.User
+	var targetPublisher models.User
+	if role == "advertiser" {
+		if err := db.Where("email = ? AND role = ?", userEmail, "advertiser").First(&advertiser).Error; err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "advertiser user not found"})
+		}
+		if body.PublisherID == 0 && strings.TrimSpace(body.PublisherEmail) == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "publisherId or publisherEmail is required for advertiser manual requests"})
+		}
+		resolvedPublisher, resolvePublisherErr := resolveManualRequestPublisher(body.PublisherID, body.PublisherEmail)
+		if resolvePublisherErr != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": resolvePublisherErr.Error()})
+		}
+		targetPublisher = resolvedPublisher
+	} else {
+		resolvedAdvertiser, resolveErr := resolveManualRequestAdvertiser(body.AdvertiserID, body.AdvertiserPresetName)
+		if resolveErr != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": resolveErr.Error()})
+		}
+		advertiser = resolvedAdvertiser
+		if role == "publisher" {
+			targetPublisher.Email = userEmail
+		}
+	}
+
+	headers := []string{
+		"Publisher ID",
+		"Vollständiger Name des Endkunden",
+		"Adresse des Endkunden",
+		"E-Mailadresse des Endkunden",
+		"Sonstige Daten/Dokumente des Endkunden (Optional)",
+		"Höhe der Provision (Optional)",
+		"Grund der Anfrage",
+		"Timestamp",
+		"SubID",
+		"Ordertoken/OrderID",
+		"Ordertoken/Order ID",
+		"Abgeschlossener Tarif",
+		"Belieferungsbeginn (Optional)",
+		"Feedback",
+		"Status in der uppr Performance Platform",
+		"Sonstiges Feedback",
+	}
+
+	filenameBase := fmt.Sprintf("manual_request_%s.csv", time.Now().Format("20060102_150405"))
+	if role == "advertiser" {
+		filenameBase = fmt.Sprintf("manual_request_advertiser_%s.csv", time.Now().Format("20060102_150405"))
+	}
+	storedPath := buildStoredUploadPath(filenameBase)
+
+	outFile, err := os.Create(storedPath)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create manual request file"})
+	}
+	defer outFile.Close()
+
+	writer := csv.NewWriter(outFile)
+	if err := writer.Write(headers); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to write header"})
+	}
+	for _, row := range body.Rows {
+		normalized := make([]string, len(headers))
+		for i := 0; i < len(headers) && i < len(row); i++ {
+			normalized[i] = strings.TrimSpace(row[i])
+		}
+		// Nur sinnvolle Zeilen speichern.
+		rowHasContent := false
+		for _, cell := range normalized {
+			if cell != "" {
+				rowHasContent = true
+				break
+			}
+		}
+		if !rowHasContent {
+			continue
+		}
+		if err := writer.Write(normalized); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to write data row"})
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to finalize csv"})
+	}
+
+	fileInfo, statErr := os.Stat(storedPath)
+	if statErr != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read created file"})
+	}
+
+	initialStatus := "pending"
+	if role == "advertiser" {
+		initialStatus = "feedback_submitted_advertiser"
+	}
+	upload := models.Upload{
+		Filename:       filenameBase,
+		FileSize:       fileInfo.Size(),
+		ContentType:    "text/csv",
+		UploadedBy:     userEmail,
+		LastModifiedBy: userEmail,
+		Status:         initialStatus,
+		FilePath:       storedPath,
+	}
+	if role == "advertiser" {
+		upload.UploadedBy = targetPublisher.Email
+	}
+	if err := db.Create(&upload).Error; err != nil {
+		_ = os.Remove(storedPath)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save upload in DB"})
+	}
+
+	access := models.UploadAccess{
+		UploadID:     upload.ID,
+		AdvertiserID: advertiser.ID,
+	}
+	if err := db.Create(&access).Error; err != nil {
+		_ = db.Delete(&upload).Error
+		_ = os.Remove(storedPath)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to assign advertiser"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":  "Manual request created successfully",
+		"uploadId": upload.ID,
+		"filename": filenameBase,
+	})
+}
+
+func resolveManualRequestAdvertiser(advertiserID uint, presetName string) (models.User, error) {
+	var advertiser models.User
+	if advertiserID > 0 {
+		if err := db.Where("id = ? AND role = ?", advertiserID, "advertiser").First(&advertiser).Error; err != nil {
+			return advertiser, fmt.Errorf("invalid advertiser selection")
+		}
+		return advertiser, nil
+	}
+
+	preset := strings.TrimSpace(presetName)
+	if preset == "" {
+		return advertiser, fmt.Errorf("advertiserId or advertiserPresetName is required")
+	}
+
+	normalize := func(value string) string {
+		return strings.ToLower(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.TrimSpace(value), ""))
+	}
+	needle := normalize(preset)
+	if needle == "" {
+		return advertiser, fmt.Errorf("invalid advertiser preset")
+	}
+
+	var advertisers []models.User
+	if err := db.Where("role = ?", "advertiser").Find(&advertisers).Error; err != nil {
+		return advertiser, fmt.Errorf("failed to resolve advertiser")
+	}
+	for _, item := range advertisers {
+		haystack := normalize(item.Name) + " " + normalize(item.Company) + " " + normalize(item.Email)
+		if strings.Contains(haystack, needle) {
+			return item, nil
+		}
+	}
+	return advertiser, fmt.Errorf("no matching advertiser found for preset")
+}
+
+func resolveManualRequestPublisher(publisherID uint, publisherEmail string) (models.User, error) {
+	var publisher models.User
+	if publisherID > 0 {
+		if err := db.Where("id = ? AND role = ?", publisherID, "publisher").First(&publisher).Error; err != nil {
+			return publisher, fmt.Errorf("invalid publisher selection")
+		}
+		return publisher, nil
+	}
+	email := strings.TrimSpace(publisherEmail)
+	if email == "" {
+		return publisher, fmt.Errorf("publisherId or publisherEmail is required")
+	}
+	if err := db.Where("email = ? AND role = ?", email, "publisher").First(&publisher).Error; err != nil {
+		return publisher, fmt.Errorf("invalid publisher selection")
+	}
+	return publisher, nil
+}
+
 // Handle get uploads
 func handleGetUploads(c *fiber.Ctx) error {
 	u := c.Locals("user")
@@ -279,7 +496,7 @@ func handleGetUploads(c *fiber.Ctx) error {
 				uploadIDs = append(uploadIDs, a.UploadID)
 			}
 			if len(uploadIDs) > 0 {
-				db.Where("id IN ?", uploadIDs).Order("created_at desc").Find(&accessUploads)
+				db.Where("id IN ? AND status <> ?", uploadIDs, "pending").Order("created_at desc").Find(&accessUploads)
 			}
 		}
 
@@ -355,8 +572,8 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
 	}
 	role := claims["role"].(string)
-	if role != "admin" {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only admin can view advertisers"})
+	if role != "admin" && role != "publisher" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to view advertisers"})
 	}
 
 	var advertisers []models.User
@@ -371,6 +588,36 @@ func handleGetAdvertisers(c *fiber.Ctx) error {
 			"company":             a.Company,
 			"commission_group_id": a.CommissionGroupID,
 			"trigger_id":          a.TriggerID,
+		})
+	}
+	return c.JSON(result)
+}
+
+func handleGetPublishers(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+	role := claims["role"].(string)
+	if role != "admin" && role != "publisher" && role != "advertiser" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to view publishers"})
+	}
+
+	var publishers []models.User
+	db.Where("role = ?", "publisher").Find(&publishers)
+
+	var result []fiber.Map
+	for _, p := range publishers {
+		result = append(result, fiber.Map{
+			"id":    p.ID,
+			"name":  p.Name,
+			"email": p.Email,
 		})
 	}
 	return c.JSON(result)
@@ -446,10 +693,22 @@ func handleGrantAccessDB(c *fiber.Ctx) error {
 		ExpiresAt:    body.ExpiresAt,
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
+		var upload models.Upload
+		if err := tx.First(&upload, uploadID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("upload_id = ?", uploadID).Delete(&models.UploadAccess{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Create(&access).Error; err != nil {
 			return err
 		}
-		return tx.Model(&models.Upload{}).Where("id = ?", uploadID).Update("status", "assigned").Error
+		nextStatus := "assigned"
+		if isAdvertiserManualRequest(upload) && upload.Status == "feedback" {
+			// Sonderfall: nach Publisher-Rücklauf sendet Admin final an Advertiser.
+			nextStatus = "returned_to_publisher"
+		}
+		return tx.Model(&models.Upload{}).Where("id = ?", uploadID).Update("status", nextStatus).Error
 	}); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to grant access"})
 	}
@@ -527,8 +786,26 @@ func handleUpdateUploadStatus(c *fiber.Ctx) error {
 	}
 
 	if body.Status == "completed" {
-		if role != "publisher" {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only publisher can complete uploads"})
+		if role != "publisher" && role != "advertiser" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only publisher or advertiser can complete uploads"})
+		}
+		if role == "advertiser" {
+			var upload models.Upload
+			if err := db.First(&upload, id).Error; err != nil {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+			}
+			if !isAdvertiserManualRequest(upload) {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Advertiser can only complete advertiser manual requests"})
+			}
+			userEmail := claims["email"].(string)
+			var user models.User
+			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+			}
+			ok, accessErr := hasActiveUploadAccess(upload.ID, user.ID)
+			if accessErr != nil || !ok {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+			}
 		}
 	} else {
 		if role != "admin" {
@@ -541,6 +818,87 @@ func handleUpdateUploadStatus(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{"message": "Status updated successfully"})
+}
+
+func handleRequestFeedbackFromPublisher(c *fiber.Ctx) error {
+	u := c.Locals("user")
+	var claims map[string]interface{}
+	switch v := u.(type) {
+	case map[string]interface{}:
+		claims = v
+	case jwt.MapClaims:
+		claims = map[string]interface{}(v)
+	default:
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid user claims"})
+	}
+
+	role := claims["role"].(string)
+	userEmail := claims["email"].(string)
+	if role != "publisher" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Only publisher can request feedback"})
+	}
+
+	id := c.Params("id")
+	var upload models.Upload
+	if err := db.First(&upload, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+	}
+	if upload.UploadedBy != userEmail {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed"})
+	}
+
+	message := ""
+	contentType := strings.ToLower(strings.TrimSpace(c.Get("Content-Type")))
+	if strings.Contains(contentType, "multipart/form-data") {
+		message = strings.TrimSpace(c.FormValue("message"))
+		file, fileErr := c.FormFile("file")
+		if fileErr == nil && file != nil {
+			if err := validateUploadFile(file); err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+			}
+			if strings.ToLower(filepath.Ext(file.Filename)) == ".csv" {
+				newPath := buildStoredUploadPath(file.Filename)
+				if err := c.SaveFile(file, newPath); err != nil {
+					return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save attached csv"})
+				}
+				oldPath := upload.FilePath
+				upload.FilePath = newPath
+				upload.Filename = file.Filename
+				upload.FileSize = file.Size
+				upload.ContentType = file.Header.Get("Content-Type")
+				if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+					log.Printf("warning: failed to remove previous upload file: %v", err)
+				}
+			}
+		}
+	} else {
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+		}
+		message = strings.TrimSpace(body.Message)
+	}
+
+	// Special Case Advertiser-Manuellanfrage:
+	// Publisher schickt die Datei zur Admin-Prüfung zurück => "Netzwerk-Verarbeitung".
+	if isAdvertiserManualRequest(upload) {
+		upload.Status = "feedback"
+	} else {
+		upload.Status = "feedback_submitted"
+	}
+	upload.FeedbackMessage = message
+	upload.LastModifiedBy = userEmail
+	upload.UpdatedAt = time.Now()
+	if err := db.Save(&upload).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to request feedback"})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":         "Feedback requested successfully",
+		"feedbackMessage": message,
+	})
 }
 
 // Handle delete upload
@@ -565,7 +923,18 @@ func handleDeleteUpload(c *fiber.Ctx) error {
 	}
 
 	if role != "admin" && upload.UploadedBy != userEmail {
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
+		if role == "advertiser" && isAdvertiserManualRequest(upload) {
+			var user models.User
+			if err := db.Where("email = ?", userEmail).First(&user).Error; err != nil {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
+			}
+			ok, accessErr := hasActiveUploadAccess(upload.ID, user.ID)
+			if accessErr != nil || !ok {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
+			}
+		} else {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Not allowed to delete this file"})
+		}
 	}
 
 	if err := db.Transaction(func(tx *gorm.DB) error {
@@ -647,7 +1016,9 @@ func handleReplaceUpload(c *fiber.Ctx) error {
 	upload.UpdatedAt = time.Now()
 	upload.LastModifiedBy = userEmail
 	if role == "advertiser" {
-		upload.Status = "feedback_submitted"
+		// Advertiser-Bearbeitung geht zuerst in die Netzwerk-Verarbeitung.
+		// "Rückfrage" ist ein separater Publisher-Schritt und wird nur dort gesetzt.
+		upload.Status = "feedback"
 	}
 	if err := db.Transaction(func(tx *gorm.DB) error {
 		return tx.Save(&upload).Error
@@ -765,17 +1136,190 @@ func handleSaveFileContent(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Failed to save file: " + err.Error()})
 	}
 
+	warnings, refreshErr := refreshCandidatesAndCollectDuplicateWarnings(upload, body.Data)
+	if refreshErr != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to refresh duplicate checks"})
+	}
+
 	// Upload-Metadaten aktualisieren
 	upload.LastModifiedBy = userEmail
 	upload.UpdatedAt = time.Now()
 	if role == "advertiser" {
-		upload.Status = "feedback_submitted"
+		// Advertiser-Bearbeitung geht zuerst in die Netzwerk-Verarbeitung.
+		// "Rückfrage" ist ein separater Publisher-Schritt und wird nur dort gesetzt.
+		upload.Status = "feedback"
 	}
 	if err := db.Save(&upload).Error; err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to update upload metadata"})
 	}
 
-	return c.JSON(fiber.Map{"message": "File saved successfully"})
+	return c.JSON(fiber.Map{
+		"message":  "File saved successfully",
+		"warnings": warnings,
+	})
+}
+
+type saveContentDuplicateConflict struct {
+	UploadID      uint   `json:"uploadId"`
+	Filename      string `json:"filename"`
+	RowIndex      int    `json:"rowIndex,omitempty"`
+	MatchedColumn string `json:"matchedColumn,omitempty"`
+}
+
+type saveContentWarning struct {
+	Type            string                         `json:"type"`
+	OrderToken      string                         `json:"orderToken"`
+	CurrentUploadID uint                           `json:"currentUploadId"`
+	Conflicts       []saveContentDuplicateConflict `json:"conflicts"`
+}
+
+type duplicateCandidateRow struct {
+	OrderToken    string
+	MatchedColumn string
+	RowNo         int
+}
+
+func refreshCandidatesAndCollectDuplicateWarnings(upload models.Upload, data [][]string) ([]saveContentWarning, error) {
+	candidates := extractOrderTokenCandidatesFromTable(data)
+
+	if err := db.Where("upload_id = ?", upload.ID).Delete(&models.UploadOrderCandidate{}).Error; err != nil {
+		return nil, err
+	}
+
+	if len(candidates) == 0 {
+		return []saveContentWarning{}, nil
+	}
+
+	now := time.Now()
+	rowsToInsert := make([]models.UploadOrderCandidate, 0, len(candidates))
+	tokenSet := make(map[string]struct{})
+	for _, row := range candidates {
+		token := strings.TrimSpace(row.OrderToken)
+		if token == "" {
+			continue
+		}
+		rowsToInsert = append(rowsToInsert, models.UploadOrderCandidate{
+			UploadID:           upload.ID,
+			RowNo:              row.RowNo,
+			CampaignExternalID: "",
+			OrderToken:         token,
+			LastValidatedAt:    &now,
+			RawRow:             map[string]any{"matched_column": row.MatchedColumn},
+		})
+		tokenSet[token] = struct{}{}
+	}
+
+	if len(rowsToInsert) > 0 {
+		if err := db.Create(&rowsToInsert).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	tokens := make([]string, 0, len(tokenSet))
+	for token := range tokenSet {
+		tokens = append(tokens, token)
+	}
+	if len(tokens) == 0 {
+		return []saveContentWarning{}, nil
+	}
+
+	type duplicateHit struct {
+		OrderToken string
+		UploadID   uint
+		Filename   string
+		RowNo      int
+	}
+
+	var hits []duplicateHit
+	if err := db.Table("upload_order_candidates AS c").
+		Select("c.order_token AS order_token, c.upload_id AS upload_id, u.filename AS filename, c.row_no AS row_no").
+		Joins("JOIN uploads AS u ON u.id = c.upload_id").
+		Where("c.upload_id <> ? AND c.order_token IN ?", upload.ID, tokens).
+		Order("c.order_token ASC, u.filename ASC, c.row_no ASC").
+		Scan(&hits).Error; err != nil {
+		return nil, err
+	}
+
+	if len(hits) == 0 {
+		return []saveContentWarning{}, nil
+	}
+
+	conflictsByToken := make(map[string][]saveContentDuplicateConflict)
+	seenConflict := make(map[string]struct{})
+	for _, hit := range hits {
+		key := fmt.Sprintf("%s|%d|%d", hit.OrderToken, hit.UploadID, hit.RowNo)
+		if _, exists := seenConflict[key]; exists {
+			continue
+		}
+		seenConflict[key] = struct{}{}
+		conflictsByToken[hit.OrderToken] = append(conflictsByToken[hit.OrderToken], saveContentDuplicateConflict{
+			UploadID: hit.UploadID,
+			Filename: strings.TrimSpace(hit.Filename),
+			RowIndex: hit.RowNo,
+		})
+	}
+
+	warnings := make([]saveContentWarning, 0, len(conflictsByToken))
+	for token, conflicts := range conflictsByToken {
+		warnings = append(warnings, saveContentWarning{
+			Type:            "duplicate_order_token",
+			OrderToken:      token,
+			CurrentUploadID: upload.ID,
+			Conflicts:       conflicts,
+		})
+	}
+	slices.SortFunc(warnings, func(a, b saveContentWarning) int {
+		return strings.Compare(a.OrderToken, b.OrderToken)
+	})
+	return warnings, nil
+}
+
+func extractOrderTokenCandidatesFromTable(data [][]string) []duplicateCandidateRow {
+	if len(data) == 0 {
+		return nil
+	}
+
+	expected := []string{
+		"Ordertoken/OrderID",
+		"Ordertoken/Order ID",
+	}
+	headerIdx := lib.FindHeaderRow(data, expected)
+	rows := lib.TableToMaps(data, headerIdx)
+	if len(rows) == 0 {
+		return nil
+	}
+
+	candidates := make([]duplicateCandidateRow, 0, len(rows))
+	for i, row := range rows {
+		matchedColumn := "Ordertoken/OrderID"
+		orderToken := strings.TrimSpace(row["Ordertoken/OrderID"])
+		if orderToken == "" {
+			if alt := strings.TrimSpace(row["Ordertoken/Order ID"]); alt != "" {
+				orderToken = alt
+				matchedColumn = "Ordertoken/Order ID"
+			}
+		}
+
+		if orderToken == "" {
+			for key, value := range row {
+				if strings.Contains(strings.ToLower(strings.TrimSpace(key)), "order") {
+					trimmed := strings.TrimSpace(value)
+					if trimmed != "" {
+						orderToken = trimmed
+						matchedColumn = strings.TrimSpace(key)
+						break
+					}
+				}
+			}
+		}
+
+		candidates = append(candidates, duplicateCandidateRow{
+			OrderToken:    orderToken,
+			MatchedColumn: matchedColumn,
+			RowNo:         i + 1,
+		})
+	}
+	return candidates
 }
 
 func hasActiveUploadAccess(uploadID uint, advertiserID uint) (bool, error) {
@@ -793,6 +1337,11 @@ func hasActiveUploadAccess(uploadID uint, advertiserID uint) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func isAdvertiserManualRequest(upload models.Upload) bool {
+	filename := strings.ToLower(strings.TrimSpace(upload.Filename))
+	return strings.HasPrefix(filename, "manual_request_advertiser_")
 }
 
 func validateSecurityConfig() {

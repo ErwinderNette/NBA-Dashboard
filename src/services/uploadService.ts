@@ -17,6 +17,33 @@ export interface BookingCSVExportResponse {
   rowsCount: number;
 }
 
+export interface DuplicateOrderTokenConflict {
+  uploadId: number;
+  filename: string;
+  rowIndex?: number;
+  matchedColumn?: string;
+}
+
+export interface SaveContentWarning {
+  type: 'duplicate_order_token';
+  orderToken: string;
+  currentUploadId: number;
+  conflicts: DuplicateOrderTokenConflict[];
+}
+
+export interface SaveFileContentResponse {
+  message: string;
+  warnings?: SaveContentWarning[];
+}
+
+export interface ManualRequestPayload {
+  rows: string[][];
+  advertiserId?: number;
+  advertiserPresetName?: string;
+  publisherId?: number;
+  publisherEmail?: string;
+}
+
 export const uploadService = {
   // Get all uploads
   getUploads: async (): Promise<UploadItem[]> => {
@@ -66,6 +93,15 @@ export const uploadService = {
     });
   },
 
+  createManualRequest: async (payload: ManualRequestPayload): Promise<void> => {
+    await api.post('/uploads/manual-request', payload);
+  },
+
+  getPublishers: async (): Promise<Array<{ id: number; name: string; email: string }>> => {
+    const response = await api.get('/publishers');
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
   // Datei löschen
   deleteUpload: async (uploadId: number): Promise<void> => {
     await api.delete(`/uploads/${uploadId}`);
@@ -74,6 +110,20 @@ export const uploadService = {
   // Datei an Publisher zurückschicken
   returnToPublisher: async (uploadId: number): Promise<void> => {
     await api.post(`/uploads/${uploadId}/return-to-publisher`);
+  },
+
+  // Publisher fordert Feedback zur Datei an
+  requestFeedback: async (uploadId: number, message: string, attachment?: File | null): Promise<void> => {
+    if (attachment) {
+      const formData = new FormData();
+      formData.append("message", message);
+      formData.append("file", attachment);
+      await api.post(`/uploads/${uploadId}/request-feedback`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return;
+    }
+    await api.post(`/uploads/${uploadId}/request-feedback`, { message });
   },
 
   // Datei abschließen
@@ -88,8 +138,9 @@ export const uploadService = {
   },
 
   // Datei-Inhalt speichern
-  saveFileContent: async (uploadId: number, data: string[][]): Promise<void> => {
-    await api.post(`/uploads/${uploadId}/content`, { data });
+  saveFileContent: async (uploadId: number, data: string[][]): Promise<SaveFileContentResponse> => {
+    const response = await api.post(`/uploads/${uploadId}/content`, { data });
+    return response.data;
   },
 
   

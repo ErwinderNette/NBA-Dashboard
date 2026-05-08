@@ -17,12 +17,91 @@ import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import api from '@/services/api';
 import { validationStorage } from '@/utils/validationStorage';
+import { getStatusMeta } from "@/utils/uploadStatus";
+import type { UploadListSortOrder } from "@/utils/uploadListSort";
+import { UploadListSortMenu } from "@/components/UploadListSortMenu";
 
 interface AdvertiserFileListProps {
   uploads?: UploadItem[];
+  embedded?: boolean;
+  listSortOrder?: UploadListSortOrder;
+  onListSortOrderChange?: (order: UploadListSortOrder) => void;
 }
 
-const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) => {
+type AdvertiserStatusMeta = {
+  label: string;
+  badgeClassName: string;
+  accentClassName: string;
+};
+
+/** Farbe der ersten Zeile (CSV-Überschriften) in der Advertiser-Tabelle — nur Header-Zellen. */
+type AdvertiserHeaderTone = "blue" | "magenta" | "gray";
+
+function normalizeAdvertiserHeaderLabel(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/\s+/g, " ");
+}
+
+function getAdvertiserHeaderColumnTone(raw: string): AdvertiserHeaderTone {
+  const n = normalizeAdvertiserHeaderLabel(raw);
+
+  // Magenta zuerst (spezifischer als blaue Ordertoken-Spalte)
+  if (n.includes("feedback")) return "magenta";
+  if (n.includes("abgeschlossener tarif")) return "magenta";
+  if (n.includes("belieferungsbeginn")) return "magenta";
+  if (n.includes("ordertoken") && n.includes("order id")) return "magenta";
+
+  // Blau
+  if (n.includes("publisher") && n.includes("id")) return "blue";
+  if (n.includes("vollstandiger")) return "blue";
+  if (n.includes("adresse") && (n.includes("endkund") || n.includes("des end"))) return "blue";
+  if (n.includes("e-mail") || n.includes("emailadresse") || (n.includes("mail") && n.includes("endkund"))) return "blue";
+  if (n.includes("sonstige") || (n.includes("dokumente") && n.includes("endkund"))) return "blue";
+  if (n.includes("provision")) return "blue";
+  if (n.includes("grund der") || (n.includes("grund") && n.includes("anfrage"))) return "blue";
+  if (n.includes("timestamp") || /^time\b/.test(n)) return "blue";
+  if (n.includes("subid") || n.includes("sub id")) return "blue";
+  if (n.includes("ordertoken")) return "blue";
+
+  return "gray";
+}
+
+function advertiserHeaderInputClasses(
+  tone: AdvertiserHeaderTone,
+  editable: boolean,
+  isSelected: boolean
+): string {
+  const ring = isSelected ? "ring-2 ring-pink-500 ring-offset-1" : "";
+  const base =
+    "border h-5 min-h-5 text-xs md:text-xs px-2 py-0 min-w-[140px] leading-tight font-semibold cursor-text";
+  const byTone: Record<AdvertiserHeaderTone, { bg: string; border: string }> = {
+    blue: {
+      bg: editable ? "bg-sky-100 text-sky-950 hover:bg-sky-200" : "bg-sky-100 text-sky-950",
+      border: "border-sky-300",
+    },
+    magenta: {
+      bg: editable ? "bg-fuchsia-100 text-fuchsia-950 hover:bg-fuchsia-200" : "bg-fuchsia-100 text-fuchsia-950",
+      border: "border-fuchsia-300",
+    },
+    gray: {
+      bg: editable ? "bg-gray-100 text-gray-800 hover:bg-gray-200" : "bg-gray-100 text-gray-800",
+      border: "border-gray-300",
+    },
+  };
+  const { bg, border } = byTone[tone];
+  return `${base} ${border} ${bg} ${ring}`;
+}
+
+const AdvertiserFileList = ({
+  uploads: uploadsProp,
+  embedded = false,
+  listSortOrder,
+  onListSortOrderChange,
+}: AdvertiserFileListProps) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editData, setEditData] = useState<Record<number, {
     feedback: string;
@@ -35,6 +114,7 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   const fileInputs = useRef<Record<number, HTMLInputElement | null>>({});
   const [selectedFiles, setSelectedFiles] = useState<Record<number, File | null>>({});
   const [isUploading, setIsUploading] = useState<Record<number, boolean>>({});
+  const [isCompleting, setIsCompleting] = useState<Record<number, boolean>>({});
   const [uploadConfirmOpen, setUploadConfirmOpen] = useState<Record<number, boolean>>({});
   const [pendingUploadId, setPendingUploadId] = useState<number | null>(null);
   const { toast } = useToast();
@@ -113,55 +193,80 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     api.get('/users').then(res => setAllUsers(res.data)).catch(() => setAllUsers([]));
   }, []);
 
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'assigned':
-        return 'NBA eingegangen';
-      case 'feedback':
-        return 'Feedback eingereicht';
-      case 'feedback_submitted':
-        return 'Feedback eingereicht';
-      case 'returned_to_publisher':
-        return 'Publisher eingegangen';
-      case 'completed':
-        return 'Abgeschlossen';
-      case 'nba_received':
-        return 'NBA eingegangen';
-      case 'pending':
-        return 'offen';
-      case 'approved':
-        return 'ausgeführt';
-      case 'rejected':
-        return 'abgelehnt';
-      default:
-        return status;
+  const getAdvertiserStatusMeta = (status: string, filename?: string): AdvertiserStatusMeta => {
+    const isAdvertiserManualRequest = (filename || "").toLowerCase().startsWith("manual_request_advertiser_");
+
+    if (status === "nba_received" || status === "pending" || status === "assigned") {
+      return {
+        label: "Neu",
+        badgeClassName: "bg-slate-100 text-slate-700",
+        accentClassName: "bg-slate-400",
+      };
     }
+    if (status === "feedback") {
+      if (isAdvertiserManualRequest) {
+        return {
+          label: "Netzwerk-Verarbeitung",
+          badgeClassName: "bg-purple-100 text-purple-700",
+          accentClassName: "bg-purple-500",
+        };
+      }
+      return {
+        label: "Netzwerk-Verarbeitung",
+        badgeClassName: "bg-yellow-100 text-yellow-700",
+        accentClassName: "bg-yellow-400",
+      };
+    }
+    if (status === "returned_to_publisher") {
+      if (isAdvertiserManualRequest) {
+        return {
+          label: "Feedback erhalten",
+          badgeClassName: "bg-purple-100 text-purple-700",
+          accentClassName: "bg-purple-500",
+        };
+      }
+      return {
+        label: "Feedback erhalten",
+        badgeClassName: "bg-emerald-100 text-emerald-700",
+        accentClassName: "bg-emerald-400",
+      };
+    }
+    if (status === "feedback_submitted") {
+      return {
+        label: "Rückfrage",
+        badgeClassName: "bg-sky-100 text-sky-700",
+        accentClassName: "bg-sky-500",
+      };
+    }
+    if (status === "feedback_submitted_advertiser") {
+      return {
+        label: "Rückfrage (Advertiser)",
+        badgeClassName: "bg-purple-100 text-purple-700",
+        accentClassName: "bg-purple-500",
+      };
+    }
+    if (status === "sent_to_publisher_advertiser") {
+      return {
+        label: "An Publisher gesendet",
+        badgeClassName: "bg-purple-100 text-purple-700",
+        accentClassName: "bg-purple-500",
+      };
+    }
+    return getStatusMeta(status);
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'assigned':
-        return 'bg-pink-600'; // magenta
-      case 'feedback':
-        return 'bg-yellow-400'; // gelb
-      case 'returned_to_publisher':
-        return 'bg-sky-300'; // hellblau
-      case 'completed':
-        return 'bg-green-500'; // grün
-      case 'nba_received':
-        return 'bg-gray-400';
-      case 'feedback_submitted':
-        return 'bg-blue-500';
-      case 'approved':
-      case 'granted':
-        return 'bg-pink-500';
-      case 'pending':
-        return 'bg-gray-400';
-      case 'rejected':
-        return 'bg-blue-500';
-      default:
-        return 'bg-gray-400';
-    }
+  const toCompanyLabel = (email?: string) => {
+    if (!email) return "";
+    const user = allUsers.find((entry) => entry.email === email);
+    if (user?.company?.trim()) return user.company.trim();
+    return email.split("@")[0] || email;
+  };
+
+  const getParticipants = (file: UploadItem) => {
+    const publisherLabel = toCompanyLabel(file.uploaded_by);
+    const participants: Array<{ label: string; tone: "publisher" | "advertiser" }> = [];
+    if (publisherLabel) participants.push({ label: publisherLabel, tone: "publisher" });
+    return participants;
   };
 
   const handleExpand = async (id: number) => {
@@ -243,12 +348,31 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     if (fileData[id]) {
       setIsSavingFile(prev => ({ ...prev, [id]: true }));
       try {
-        await uploadService.saveFileContent(id, fileData[id]);
+        const saveResult = await uploadService.saveFileContent(id, fileData[id]);
         setOriginalFileData(prev => ({ ...prev, [id]: JSON.parse(JSON.stringify(fileData[id])) }));
         toast({
           title: "Erfolg",
           description: "Datei wurde erfolgreich gespeichert.",
         });
+        if (Array.isArray(saveResult?.warnings) && saveResult.warnings.length > 0) {
+          const conflictFiles = Array.from(
+            new Set(
+              saveResult.warnings.flatMap((warning) =>
+                warning.conflicts.map((conflict) => conflict.filename).filter(Boolean)
+              )
+            )
+          );
+          const tokenPreview = saveResult.warnings
+            .slice(0, 3)
+            .map((warning) => warning.orderToken)
+            .join(", ");
+
+          toast({
+            title: "Dublettenwarnung",
+            description: `Ordertoken bereits in NBA-Datei(en): ${conflictFiles.join(", ")}. Betroffene Tokens: ${tokenPreview}${saveResult.warnings.length > 3 ? ", ..." : ""}`,
+            variant: "destructive",
+          });
+        }
         // Lade Uploads neu
         const allUploads = await uploadService.getUploads();
         // Sortiere nach upload_date (neueste zuerst)
@@ -577,6 +701,36 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
     }
   };
 
+  const isAdvertiserManualRequest = (filename: string) =>
+    (filename || "").toLowerCase().startsWith("manual_request_advertiser_");
+
+  const handleComplete = async (uploadId: number) => {
+    setIsCompleting(prev => ({ ...prev, [uploadId]: true }));
+    try {
+      await uploadService.completeUpload(uploadId);
+      toast({ title: 'Datei abgeschlossen', description: 'Die manuelle Anfrage wurde abgeschlossen.' });
+      window.dispatchEvent(new Event("uploads-updated"));
+      window.location.reload();
+    } catch (err) {
+      toast({ title: 'Fehler', description: 'Die Datei konnte nicht abgeschlossen werden.', variant: 'destructive' });
+    } finally {
+      setIsCompleting(prev => ({ ...prev, [uploadId]: false }));
+    }
+  };
+
+  const handleDelete = async (uploadId: number) => {
+    const confirmed = window.confirm("Möchtest du diese manuelle Anfrage wirklich löschen?");
+    if (!confirmed) return;
+    try {
+      await uploadService.deleteUpload(uploadId);
+      toast({ title: 'Datei gelöscht', description: 'Die manuelle Anfrage wurde gelöscht.' });
+      window.dispatchEvent(new Event("uploads-updated"));
+      window.location.reload();
+    } catch (err) {
+      toast({ title: 'Fehler', description: 'Die Datei konnte nicht gelöscht werden.', variant: 'destructive' });
+    }
+  };
+
   if (isLoading) {
     return <div className="empty-state-card">Dateien werden geladen...</div>;
   }
@@ -585,22 +739,27 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-lg p-6">
-      <h3 className="text-xl font-semibold text-gray-800 mb-6">Aktuelle Uploads</h3>
+    <div className={embedded ? "" : "bg-white rounded-2xl shadow-lg p-6"}>
+      <div className="mb-6 flex items-center justify-between gap-3">
+        <h3 className="text-xl font-semibold text-gray-800">Aktuelle Uploads</h3>
+        {listSortOrder != null && onListSortOrderChange ? (
+          <UploadListSortMenu value={listSortOrder} onChange={onListSortOrderChange} />
+        ) : null}
+      </div>
       <div className="space-y-1">
         {/* Header */}
         <div className="grid grid-cols-12 gap-4 pb-3 border-b border-gray-200 text-sm font-medium text-gray-600">
           <div className="col-span-4">Dateiname</div>
-          <div className="col-span-2">Upload Datum</div>
-          <div className="col-span-3">Publisher</div>
           <div className="col-span-2">Status</div>
+          <div className="col-span-2">Upload Datum</div>
+          <div className="col-span-3">Partner</div>
           <div className="col-span-1">Upload</div>
           <div className="col-span-1">Download</div>
         </div>
         {/* File rows */}
         {(uploads ?? []).length === 0 && (
           <div className="empty-state-card">
-            <p>Derzeit liegen keine offenen Dateien fuer dich vor.</p>
+            <p>Derzeit liegen keine offenen Dateien für dich vor.</p>
             <p className="mt-1 text-sm text-slate-500">
               Sobald ein Publisher etwas zuweist, erscheint es automatisch hier.
             </p>
@@ -610,23 +769,32 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
           <div key={file.id}>
             <div className="grid grid-cols-12 gap-4 py-3 hover:bg-gray-50 transition-colors duration-150 rounded-lg items-center">
               <div
-                className="col-span-4 text-gray-800 font-medium truncate max-w-[350px] cursor-pointer"
+                className="col-span-4 text-sm text-gray-800 font-medium truncate max-w-[350px] cursor-pointer"
                 title={file.filename}
               >
                 {file.filename}
               </div>
+              <div className="col-span-2 flex items-center">
+                <span className={`rounded-full px-2 py-1 text-xs font-semibold ${getAdvertiserStatusMeta(file.status, file.filename).badgeClassName}`}>
+                  {getAdvertiserStatusMeta(file.status, file.filename).label}
+                </span>
+              </div>
               <div className="col-span-2 text-gray-600">
                 {file.upload_date ? new Date(file.upload_date).toLocaleDateString('de-DE') : ''}
               </div>
-              <div className="col-span-3 text-gray-800">
-                {(() => {
-                  const user = allUsers.find(u => u.email === file.uploaded_by);
-                  return user?.company || file.uploaded_by;
-                })()}
-              </div>
-              <div className="col-span-2 flex items-center">
-                <div className={`w-3 h-3 rounded-full ${getStatusColor(file.status)}`}></div>
-                <span className="ml-2 text-sm">{getStatusLabel(file.status)}</span>
+              <div className="col-span-3 text-gray-800 flex flex-wrap gap-1">
+                {getParticipants(file).map((participant, idx) => (
+                  <span
+                    key={`${participant.label}-${idx}`}
+                    className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      participant.tone === "publisher"
+                        ? "bg-blue-100 text-blue-700"
+                        : "bg-fuchsia-100 text-fuchsia-700"
+                    }`}
+                  >
+                    {participant.label}
+                  </span>
+                ))}
               </div>
               {/* Upload/Ersetzen */}
               <div className="col-span-1 flex flex-col items-start space-y-1">
@@ -727,6 +895,27 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                 >
                   <ArrowDown size={16} className="text-gray-600" />
                 </Button>
+                {isAdvertiserManualRequest(file.filename) && file.status === "returned_to_publisher" && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleComplete(file.id)}
+                      className="h-8 px-2 text-emerald-700 border-emerald-600 hover:bg-emerald-50"
+                      disabled={isCompleting[file.id]}
+                    >
+                      {isCompleting[file.id] ? "..." : "Abschließen"}
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => handleDelete(file.id)}
+                      className="h-8 px-2"
+                    >
+                      Löschen
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             {/* Expandable edit section */}
@@ -740,7 +929,7 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                   </div>
                 ) : fileData[file.id] && fileData[file.id].length > 0 ? (
                   <div className="mb-6">
-                    <Label className="text-pink-600 font-medium mb-3 block text-sm">
+                    <Label className="text-pink-600 font-medium mb-3 block text-xs">
                       {file.filename} ({fileData[file.id].length} Zeilen)
                     </Label>
 
@@ -767,8 +956,8 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                               }
                               
                               return (
-                                <tr key={rowIndex} className={`border-b transition-colors ${isHeaderRow ? 'bg-blue-50' : rowStatusClass}`}>
-                                  <td className={`border-r p-2 text-sm font-semibold text-center sticky left-0 z-10 min-w-[50px] ${isHeaderRow ? 'bg-blue-100 text-blue-800' : 'bg-gray-50 text-gray-600'}`}>
+                                <tr key={rowIndex} className={`border-b transition-colors ${isHeaderRow ? "bg-white" : rowStatusClass}`}>
+                                  <td className={`border-r py-0.5 px-2 text-xs font-semibold text-center sticky left-0 z-10 min-w-[50px] align-middle ${isHeaderRow ? "bg-gray-100 text-gray-600" : "bg-gray-50 text-gray-600"}`}>
                                     {rowIndex + 1}
                                   </td>
 
@@ -776,10 +965,11 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                                     const editable = isColumnEditable(file.id, colIndex, rowIndex);
                                     const cellKey = `${rowIndex}-${colIndex}`;
                                     const isSelected = selectedCells[file.id]?.has(cellKey) || false;
+                                    const headerTone = isHeaderRow ? getAdvertiserHeaderColumnTone(String(cell ?? "")) : "gray";
                                     return (
                                       <td 
                                         key={colIndex} 
-                                        className="border-r p-1 border-gray-200"
+                                        className="border-r py-0.5 px-1 border-gray-200 align-middle"
                                         onMouseDown={(e) => handleCellMouseDown(file.id, rowIndex, colIndex, e)}
                                         onMouseEnter={(e) => handleCellMouseEnter(file.id, rowIndex, colIndex, e)}
                                       >
@@ -829,26 +1019,24 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                                               }));
                                             }
                                           }}
-                                          className={`border border-gray-200 h-10 text-sm px-2 py-1 min-w-[140px] leading-normal ${
-                                            isSelected 
-                                              ? 'ring-2 ring-pink-500 ring-offset-1'
-                                              : ''
-                                          } ${
-                                            isHeaderRow 
-                                              ? editable
-                                                ? 'bg-blue-50 font-semibold hover:bg-blue-100'
-                                                : 'bg-blue-100 font-semibold text-gray-600 cursor-text'
-                                              : editable
-                                                ? 'bg-white hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-pink-500'
-                                                : 'bg-gray-100 text-gray-600 cursor-text'
-                                          }`}
+                                          className={
+                                            isHeaderRow
+                                              ? advertiserHeaderInputClasses(headerTone, editable, isSelected)
+                                              : `border border-gray-200 h-5 min-h-5 text-xs md:text-xs px-2 py-0 min-w-[140px] leading-tight ${
+                                                  isSelected ? "ring-2 ring-pink-500 ring-offset-1" : ""
+                                                } ${
+                                                  editable
+                                                    ? "bg-white hover:bg-gray-50 focus-visible:ring-2 focus-visible:ring-pink-500"
+                                                    : "bg-gray-100 text-gray-600 cursor-text"
+                                                }`
+                                          }
                                           placeholder=""
                                         />
                                       </td>
                                     );
                                   })}
                                   {/* Zelle für neue Spalten */}
-                                  <td className="border-r p-1 border-gray-200">
+                                  <td className="border-r py-0.5 px-1 border-gray-200 align-middle">
                                     <Input
                                       value=""
                                       onChange={(e) => {
@@ -857,7 +1045,11 @@ const AdvertiserFileList = ({ uploads: uploadsProp }: AdvertiserFileListProps) =
                                         }
                                       }}
                                       placeholder="+"
-                                      className="border border-gray-200 focus-visible:ring-2 focus-visible:ring-pink-500 h-10 w-20 text-sm bg-gray-50 hover:bg-gray-100"
+                                      className={
+                                        isHeaderRow
+                                          ? "border border-gray-300 focus-visible:ring-2 focus-visible:ring-pink-500 h-5 min-h-5 w-20 text-xs md:text-xs py-0 leading-tight bg-gray-100 text-gray-700 font-semibold hover:bg-gray-200"
+                                          : "border border-gray-200 focus-visible:ring-2 focus-visible:ring-pink-500 h-5 min-h-5 w-20 text-xs md:text-xs py-0 leading-tight bg-gray-50 hover:bg-gray-100"
+                                      }
                                     />
                                   </td>
                                 </tr>

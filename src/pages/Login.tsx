@@ -456,7 +456,7 @@ const Login = () => {
                     <a href="/forgot-password" className="text-[#009fe3] hover:underline">
                       Passwort vergessen
                     </a>{" "}
-                    fuer einen schnellen Wiedereinstieg.
+                    für einen schnellen Wiedereinstieg.
                   </p>
                 )}
               </div>
