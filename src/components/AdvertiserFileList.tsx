@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { uploadService } from '@/services/uploadService';
-import { UploadItem } from '@/types/upload';
+import type { UploadItem, UploadValidationData } from '@/types/upload';
 import { useToast } from "@/hooks/use-toast";
 import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from "@/components/ui/alert-dialog";
 import api from '@/services/api';
@@ -124,7 +124,7 @@ const AdvertiserFileList = ({
   const [isLoadingFile, setIsLoadingFile] = useState<Record<number, boolean>>({});
   const [isSavingFile, setIsSavingFile] = useState<Record<number, boolean>>({});
   // ✅ Validierungsergebnisse für Zeilenfärbung
-  const [validationData, setValidationData] = useState<Record<number, any>>({});
+  const [validationData, setValidationData] = useState<Record<number, UploadValidationData>>({});
   // ✅ Excel-ähnliche Copy-Paste Funktionalität
   const [selectedCells, setSelectedCells] = useState<Record<number, Set<string>>>({}); // fileId -> Set of "row-col"
   const [copiedCells, setCopiedCells] = useState<Record<number, { data: string[][], startRow: number, startCol: number }>>({});
@@ -146,7 +146,7 @@ const AdvertiserFileList = ({
       }
       try {
         const validations = await uploadService.getAllValidations();
-        const convertedValidations: Record<number, any> = {};
+        const convertedValidations: Record<number, UploadValidationData> = {};
         for (const [key, value] of Object.entries(validations)) {
           const uploadId = parseInt(key, 10);
           if (!isNaN(uploadId)) {
@@ -495,7 +495,12 @@ const AdvertiserFileList = ({
   };
 
   // ✅ Excel-ähnliche Copy-Paste Handler
-  const handleCellMouseDown = (fileId: number, rowIndex: number, colIndex: number, e: React.MouseEvent) => {
+  const handleCellMouseDown = (
+    fileId: number,
+    rowIndex: number,
+    colIndex: number,
+    e: React.MouseEvent | React.ClipboardEvent
+  ) => {
     if (e.shiftKey && isSelecting[fileId]) {
       // Shift+Klick: Erweitere Selection
       const start = isSelecting[fileId]!;
@@ -1007,7 +1012,7 @@ const AdvertiserFileList = ({
                                           onClick={(e) => {
                                             // Bei Klick diese Zelle selektieren (für Copy)
                                             if (e.shiftKey) {
-                                              handleCellMouseDown(file.id, rowIndex, colIndex, e as any);
+                                              handleCellMouseDown(file.id, rowIndex, colIndex, e);
                                             } else {
                                               setSelectedCells(prev => ({ 
                                                 ...prev, 

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import axios from "axios";
 import { ArrowDown, ArrowUp, X as LucideX, Edit, Save, Loader2, ArrowRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,7 @@ import {
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { sortUploads, type UploadListSortOrder } from "@/utils/uploadListSort";
 import { UploadListSortMenu } from "@/components/UploadListSortMenu";
+import type { UploadValidationData } from "@/types/upload";
 
 // Define types for the data structures based on the backend
 interface UploadItem {
@@ -81,7 +83,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
   const [isSavingFile, setIsSavingFile] = useState<Record<number, boolean>>({});
 
   // Validation State
-  const [validationData, setValidationData] = useState<Record<number, any>>({});
+  const [validationData, setValidationData] = useState<Record<number, UploadValidationData>>({});
   const [isValidating, setIsValidating] = useState<Record<number, boolean>>({});
   const [validationError, setValidationError] = useState<Record<number, string | null>>({});
   const [validationProgress, setValidationProgress] = useState<Record<number, number>>({});
@@ -233,7 +235,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     try {
       const validations = await uploadService.getAllValidations();
       // Konvertiere die Keys von String zu Number (weil Backend uint zurückgibt)
-      const convertedValidations: Record<number, any> = {};
+      const convertedValidations: Record<number, UploadValidationData> = {};
       for (const [key, value] of Object.entries(validations)) {
         const uploadId = parseInt(key, 10);
         if (!isNaN(uploadId)) {
@@ -420,7 +422,7 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
             // Speichere auch in localStorage für nächstes Mal
             validationStorage.save(id, v);
           }
-        } catch (err: any) {
+        } catch {
           // Keine Validierung vorhanden - das ist OK, wird beim Klick auf "Aktualisieren" durchgeführt
           console.log(`[handleExpand] Keine gespeicherte Validierung für file ${id}`);
         }
@@ -472,13 +474,15 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
         title: "Validierung aktualisiert",
         description: "Die Validierung wurde erfolgreich aktualisiert und gespeichert.",
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       stopFakeProgress(id, 0);
-      const detail =
-        err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Validation fehlgeschlagen";
+      let detail = "Validation fehlgeschlagen";
+      if (axios.isAxiosError(err)) {
+        const data = err.response?.data as { error?: string; detail?: string } | undefined;
+        detail = data?.error || data?.detail || err.message || detail;
+      } else if (err instanceof Error) {
+        detail = err.message;
+      }
 
       setValidationError(prev => ({ ...prev, [id]: detail }));
       toast({
@@ -1055,8 +1059,12 @@ const AdminFileList = ({ advertisers, onGrantAccess }: AdminFileListProps) => {
     }
 
     const nameStatus = cells[`${fieldName}_status`];
-    if (typeof nameStatus === "string") {
-      return nameStatus as any;
+    if (
+      nameStatus === "ok" ||
+      nameStatus === "invalid" ||
+      nameStatus === "empty"
+    ) {
+      return nameStatus;
     }
 
     return null;

@@ -15,4 +15,17 @@ export interface Advertiser {
   name: string;
   email: string;
   company?: string;
-} 
+}
+
+/** Gespeicherte Validierungs-Antwort (Auszug für Tabellen-UI). */
+export interface UploadValidationData {
+  hasValidation?: boolean;
+  rows?: Array<{
+    cells?: Record<string, unknown>;
+  }>;
+}
+
+/** Wie in localStorage (inkl. Metadaten). */
+export type StoredUploadValidation = UploadValidationData & {
+  savedAt?: string;
+};

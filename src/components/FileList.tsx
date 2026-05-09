@@ -19,6 +19,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import React, { useRef, useState, useEffect } from "react";
+import axios from "axios";
+import type { UploadValidationData } from "@/types/upload";
 import { getStatusMeta, isFeedbackPipelineStatus } from "@/utils/uploadStatus";
 import { useToast } from "@/hooks/use-toast";
 import type { UploadListSortOrder } from "@/utils/uploadListSort";
@@ -79,7 +81,7 @@ const FileList = ({
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<FileItem | null>(null);
-  const [validationData, setValidationData] = useState<Record<number, any>>({});
+  const [validationData, setValidationData] = useState<Record<number, UploadValidationData>>({});
   const [feedbackInputs, setFeedbackInputs] = useState<Record<number, string>>({});
   const [inlineMessages, setInlineMessages] = useState<Record<number, string>>({});
   const [showInquiryPanel, setShowInquiryPanel] = useState<Record<number, boolean>>({});
@@ -93,7 +95,7 @@ const FileList = ({
   useEffect(() => {
     const loadValidations = async () => {
       console.log("🔍 [FileList] Lade Validierungen für Dateien:", files.map(f => ({ id: f.id, name: f.name, status: f.status })));
-      const newValidationData: Record<number, any> = { ...validationData };
+      const newValidationData: Record<number, UploadValidationData> = { ...validationData };
 
       for (const file of files) {
         if (!file.id) {
@@ -117,8 +119,8 @@ const FileList = ({
             } else {
               console.log(`ℹ️ [FileList] Keine Validierung für UploadID=${file.id} (null zurückgegeben)`);
             }
-          } catch (err: any) {
-            if (err?.response?.status === 404) {
+          } catch (err: unknown) {
+            if (axios.isAxiosError(err) && err.response?.status === 404) {
               console.log(`ℹ️ [FileList] Keine Validierung für UploadID=${file.id} (404 - noch nicht validiert)`);
             } else {
               console.error(`❌ [FileList] Fehler beim Laden der Validierung für UploadID=${file.id}:`, err);

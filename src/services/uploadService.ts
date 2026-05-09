@@ -1,5 +1,6 @@
+import axios from 'axios';
 import api from './api';
-import { UploadItem } from '@/types/upload';
+import type { UploadItem, UploadValidationData } from '@/types/upload';
 
 export interface BookingCSVExportPayload {
   campaignId: string;
@@ -155,7 +156,7 @@ export const uploadService = {
         triggerId?: string;
         forceRefresh?: boolean;
       }
-    ): Promise<any> => {
+    ): Promise<UploadValidationData> => {
       try {
         const params: Record<string, string> = {};
         if (options?.campaignId) params.campaignId = options.campaignId;
@@ -169,34 +170,38 @@ export const uploadService = {
           timeout: 120000, // 120s, weil API-Call groß sein kann
         });
         console.log("✅ validateUpload response", response.data);
-        return response.data;
-      } catch (err: any) {
-        console.error("❌ validateUpload error", {
-          message: err?.message,
-          status: err?.response?.status,
-          data: err?.response?.data,
-          url: err?.config?.url,
-          baseURL: err?.config?.baseURL,
-        });
+        return response.data as UploadValidationData;
+      } catch (err: unknown) {
+        if (axios.isAxiosError(err)) {
+          console.error("❌ validateUpload error", {
+            message: err.message,
+            status: err.response?.status,
+            data: err.response?.data,
+            url: err.config?.url,
+            baseURL: err.config?.baseURL,
+          });
+        } else {
+          console.error("❌ validateUpload error", err);
+        }
         throw err;
       }
     },
 
     // Gespeicherte Validierungsergebnisse laden
-    getValidation: async (uploadId: number): Promise<any | null> => {
+    getValidation: async (uploadId: number): Promise<UploadValidationData | null> => {
       try {
         const response = await api.get(`/uploads/${uploadId}/validation`);
       if (response?.data?.hasValidation === false) {
         return null;
       }
-      return response.data;
-      } catch (err: any) {
+      return response.data as UploadValidationData;
+      } catch (err: unknown) {
         // 404 ist OK - bedeutet einfach, dass noch keine Validierung vorhanden ist
-        if (err?.response?.status === 404) {
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
           return null;
         }
         // Nur andere Fehler loggen, nicht 404
-        if (err?.response?.status !== 404) {
+        if (!axios.isAxiosError(err) || err.response?.status !== 404) {
           console.error("❌ getValidation error", err);
         }
         throw err;
@@ -204,12 +209,12 @@ export const uploadService = {
     },
 
     // Alle Validierungsergebnisse auf einmal laden
-    getAllValidations: async (): Promise<Record<number, any>> => {
+    getAllValidations: async (): Promise<Record<string, UploadValidationData>> => {
       try {
         const response = await api.get('/uploads/validations');
-        return response.data;
-      } catch (err: any) {
-        if (err?.response?.status === 403) {
+        return response.data as Record<string, UploadValidationData>;
+      } catch (err: unknown) {
+        if (axios.isAxiosError(err) && err.response?.status === 403) {
           return {};
         }
         console.error("❌ getAllValidations error", err);
